@@ -11,6 +11,7 @@ def load_css() -> None:
         """
         <style>
         :root {
+            color-scheme: light;
             --ink: #152238;
             --muted: #64748b;
             --blue: #1769aa;
@@ -23,6 +24,19 @@ def load_css() -> None:
         .stApp {
             background: #f7fafc;
             color: var(--ink);
+        }
+
+        [data-testid="stAppViewContainer"] {
+            background: #f7fafc;
+            color: var(--ink);
+        }
+
+        [data-testid="stWidgetLabel"] p,
+        [data-testid="stCheckbox"] label p,
+        [data-testid="stRadio"] label p,
+        [data-testid="stMetricLabel"] p,
+        [data-testid="stMetricValue"] {
+            color: var(--ink) !important;
         }
 
         .block-container {
@@ -68,6 +82,21 @@ def load_css() -> None:
         div.stButton > button[kind="primary"] {
             background: #1769aa;
             border-color: #1769aa;
+            color: #ffffff;
+        }
+
+        div.stButton > button[kind="primary"] p {
+            color: #ffffff !important;
+        }
+
+        div.stButton > button[kind="secondary"] {
+            background: #ffffff;
+            border-color: var(--line);
+            color: var(--ink);
+        }
+
+        div.stButton > button[kind="secondary"] p {
+            color: var(--ink) !important;
         }
 
         .study-banner {
