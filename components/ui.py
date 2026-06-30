@@ -19,54 +19,151 @@ def load_css() -> None:
             --surface: #ffffff;
             --soft: #f3f7fa;
         }
-        .stApp { background: #f7fafc; color: var(--ink); }
-        .block-container { max-width: 1120px; padding-top: 2rem; padding-bottom: 4rem; }
-        h1, h2, h3 { color: var(--ink); letter-spacing: 0; }
-        [data-testid="stSidebar"] { background: #102a43; }
-        [data-testid="stSidebar"] * { color: #f4f8fb; }
+
+        .stApp {
+            background: #f7fafc;
+            color: var(--ink);
+        }
+
+        .block-container {
+            max-width: 1120px;
+            padding-top: 5.5rem;
+            padding-bottom: 4rem;
+        }
+
+        h1, h2, h3 {
+            color: var(--ink);
+            letter-spacing: 0;
+        }
+
+        [data-testid="stSidebar"] {
+            background: #102a43;
+        }
+
+        [data-testid="stSidebar"] * {
+            color: #f4f8fb;
+        }
+
         [data-testid="stSidebar"] [data-testid="stRadio"] label {
-            padding: .45rem .6rem; border-radius: 6px;
+            padding: 0.45rem 0.6rem;
+            border-radius: 6px;
         }
+
         [data-testid="stMetric"] {
-            background: var(--surface); border: 1px solid var(--line);
-            border-radius: 8px; padding: 1rem 1.1rem; min-height: 118px;
-            box-shadow: 0 2px 10px rgba(21, 34, 56, .04);
+            background: var(--surface);
+            border: 1px solid var(--line);
+            border-radius: 8px;
+            padding: 1rem 1.1rem;
+            min-height: 118px;
+            box-shadow: 0 2px 10px rgba(21, 34, 56, 0.04);
         }
-        div.stButton > button, div.stDownloadButton > button {
-            border-radius: 6px; min-height: 42px; font-weight: 650;
+
+        div.stButton > button,
+        div.stDownloadButton > button {
+            border-radius: 6px;
+            min-height: 42px;
+            font-weight: 650;
         }
+
         div.stButton > button[kind="primary"] {
-            background: #1769aa; border-color: #1769aa;
+            background: #1769aa;
+            border-color: #1769aa;
         }
+
         .study-banner {
             background: linear-gradient(115deg, #0f4c75, #0f8b8d);
-            color: white; border-radius: 8px; padding: 1.5rem 1.75rem;
+            color: white;
+            border-radius: 8px;
+            padding: 1.5rem 1.75rem;
             margin-bottom: 1.25rem;
         }
-        .study-banner h1, .study-banner h2, .study-banner p { color: white; margin: 0; }
-        .study-banner p { margin-top: .45rem; opacity: .9; }
-        .eyebrow { color: #0f8b8d; font-size: .78rem; font-weight: 750;
-            text-transform: uppercase; letter-spacing: .08em; }
+
+        .study-banner h1,
+        .study-banner h2,
+        .study-banner p {
+            color: white;
+            margin: 0;
+        }
+
+        .study-banner p {
+            margin-top: 0.45rem;
+            opacity: 0.9;
+        }
+
+        .eyebrow {
+            color: #0f8b8d;
+            font-size: 0.78rem;
+            font-weight: 750;
+            text-transform: uppercase;
+            letter-spacing: 0.08em;
+        }
+
         .research-card {
-            background: var(--surface); border: 1px solid var(--line);
-            border-radius: 8px; padding: 1.2rem 1.3rem; margin-bottom: .8rem;
+            background: var(--surface);
+            border: 1px solid var(--line);
+            border-radius: 8px;
+            padding: 1.2rem 1.3rem;
+            margin-bottom: 0.8rem;
         }
-        .status-dot { display: inline-block; width: 9px; height: 9px;
-            border-radius: 50%; background: #20a37a; margin-right: .4rem; }
+
+        .status-dot {
+            display: inline-block;
+            width: 9px;
+            height: 9px;
+            border-radius: 50%;
+            background: #20a37a;
+            margin-right: 0.4rem;
+        }
+
         .task-stage {
-            min-height: 250px; display: flex; align-items: center;
-            justify-content: center; text-align: center; background: #fff;
-            border: 1px solid var(--line); border-radius: 8px; margin: 1rem 0;
+            min-height: 250px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            text-align: center;
+            background: #ffffff;
+            border: 1px solid var(--line);
+            border-radius: 8px;
+            margin: 1rem 0;
         }
-        .fixation { font-size: 4rem; color: #152238; }
-        .stimulus-circle { width: 128px; height: 128px; border-radius: 50%;
-            background: #1976d2; box-shadow: 0 0 0 10px rgba(25,118,210,.08); }
-        .stroop-word { font-size: 3.4rem; font-weight: 800; letter-spacing: 0; }
-        .fine-print { color: var(--muted); font-size: .82rem; line-height: 1.55; }
+
+        .fixation {
+            font-size: 4rem;
+            color: #152238;
+        }
+
+        .stimulus-circle {
+            width: 128px;
+            height: 128px;
+            border-radius: 50%;
+            background: #1976d2;
+            box-shadow: 0 0 0 10px rgba(25, 118, 210, 0.08);
+        }
+
+        .stroop-word {
+            font-size: 3.4rem;
+            font-weight: 800;
+            letter-spacing: 0;
+        }
+
+        .fine-print {
+            color: var(--muted);
+            font-size: 0.82rem;
+            line-height: 1.55;
+        }
+
         @media (max-width: 700px) {
-            .block-container { padding: 1rem .8rem 3rem; }
-            .study-banner { padding: 1.15rem; }
-            .stroop-word { font-size: 2.35rem; }
+            .block-container {
+                padding: 5rem 0.8rem 3rem;
+            }
+
+            .study-banner {
+                padding: 1.15rem;
+            }
+
+            .stroop-word {
+                font-size: 2.35rem;
+            }
         }
         </style>
         """,
@@ -81,16 +178,29 @@ def banner(title: str, subtitle: str) -> None:
     )
 
 
-def section_heading(kicker: str, title: str, description: str = "") -> None:
-    st.markdown(f'<div class="eyebrow">{kicker}</div>', unsafe_allow_html=True)
+def section_heading(
+    kicker: str,
+    title: str,
+    description: str = "",
+) -> None:
+    st.markdown(
+        f'<div class="eyebrow">{kicker}</div>',
+        unsafe_allow_html=True,
+    )
     st.subheader(title)
+
     if description:
         st.caption(description)
 
 
-def assessment_header(step: int, total: int, title: str, minutes: str = "2-4 min") -> None:
+def assessment_header(
+    step: int,
+    total: int,
+    title: str,
+    minutes: str = "2-4 min",
+) -> None:
     left, right = st.columns([4, 1])
-    left.caption(f"DAILY ASSESSMENT  •  STEP {step} OF {total}")
+    left.caption(f"DAILY ASSESSMENT | STEP {step} OF {total}")
     right.caption(f"About {minutes}")
     st.progress(step / total)
     st.header(title)
@@ -98,7 +208,9 @@ def assessment_header(step: int, total: int, title: str, minutes: str = "2-4 min
 
 def wearable_status(provider: str = "Oura demo") -> None:
     st.markdown(
-        f'<span class="status-dot"></span><strong>{provider}</strong> synced for demonstration',
+        (
+            '<span class="status-dot"></span>'
+            f"<strong>{provider}</strong> synced for demonstration"
+        ),
         unsafe_allow_html=True,
     )
-
