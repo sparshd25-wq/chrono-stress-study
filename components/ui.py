@@ -63,6 +63,14 @@ def load_css() -> None:
             border-radius: 6px;
         }
 
+        /* Keep sidebar nav labels white — overrides the global ink-color
+           rule above, which would otherwise make radio option text
+           dark-on-dark inside the dark navy sidebar. */
+        [data-testid="stSidebar"] [data-testid="stWidgetLabel"] p,
+        [data-testid="stSidebar"] [data-testid="stRadio"] label p {
+            color: #f4f8fb !important;
+        }
+
         [data-testid="stMetric"] {
             background: var(--surface);
             border: 1px solid var(--line);
