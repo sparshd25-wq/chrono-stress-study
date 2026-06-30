@@ -29,6 +29,7 @@ STROOP_COLORS = {
 }
 STROOP_KEY_MAP = {"ArrowLeft": "Blue", "ArrowRight": "Red"}
 STROOP_TRIAL_COUNT = 12
+STROOP_TRIAL_DURATION_SECONDS = 1.5  # each trial auto-advances after this long, response or not
 
 
 def start_assessment() -> None:
@@ -387,8 +388,10 @@ def render_stroop() -> None:
         elif hotkeys.pressed("stroop_right", key=listener_key):
             pressed_key = "ArrowRight"
 
+        elapsed_trial = time.monotonic() - st.session_state.stroop_shown_at
+
         if pressed_key:
-            reaction_ms = (time.monotonic() - st.session_state.stroop_shown_at) * 1000
+            reaction_ms = elapsed_trial * 1000
             selected_colour = STROOP_KEY_MAP[pressed_key]
             st.session_state.stroop_responses.append(
                 {
@@ -397,24 +400,57 @@ def render_stroop() -> None:
                     "response_key": pressed_key,
                     "correct": selected_colour == trial["ink"],
                     "reaction_ms": round(reaction_ms, 2),
+                    "timed_out": False,
                 }
             )
             st.session_state.stroop_index += 1
             st.session_state.stroop_shown_at = None
             st.rerun()
+            return
+
+        if elapsed_trial >= STROOP_TRIAL_DURATION_SECONDS:
+            # No key press within the trial window — record it as a genuine
+            # miss (distinct from an incorrect key press) and auto-advance.
+            st.session_state.stroop_responses.append(
+                {
+                    **trial,
+                    "response": None,
+                    "response_key": None,
+                    "correct": False,
+                    "reaction_ms": None,
+                    "timed_out": True,
+                }
+            )
+            st.session_state.stroop_index += 1
+            st.session_state.stroop_shown_at = None
+            st.rerun()
+            return
+
+        # Keep polling every cycle, same pattern as the timing tasks above.
+        # This re-arms the hotkey listener on a fresh rerun each time, so the
+        # trial keeps refreshing whether or not the participant has responded
+        # yet, rather than sitting frozen until some other widget triggers a
+        # rerun. A short interval keeps the auto-advance timing in the line
+        # above accurate at a sub-second trial duration.
+        time.sleep(.03)
+        st.rerun()
         return
 
     responses = st.session_state.stroop_responses
     accuracy = float(np.mean([item["correct"] for item in responses]) * 100)
-    reaction_times = [item["reaction_ms"] for item in responses if item["correct"]]
+    reaction_times = [
+        item["reaction_ms"] for item in responses
+        if item["correct"] and item["reaction_ms"] is not None
+    ]
     mean_reaction = float(np.mean(reaction_times)) if reaction_times else 0.0
-    errors = sum(not item["correct"] for item in responses)
+    misses = sum(1 for item in responses if item.get("timed_out"))
+    errors = sum(1 for item in responses if not item["correct"] and not item.get("timed_out"))
     st.session_state.cognitive_result = {
         "task_type": "stroop",
         "accuracy": accuracy,
         "mean_reaction_ms": mean_reaction,
         "errors": errors,
-        "misses": 0,
+        "misses": misses,
         "false_alarms": 0,
         "trials": responses,
     }
