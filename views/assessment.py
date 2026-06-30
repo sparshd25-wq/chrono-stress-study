@@ -9,6 +9,7 @@ from typing import Any
 
 import numpy as np
 import streamlit as st
+import streamlit_hotkeys as hotkeys
 
 from components.ui import assessment_header
 from config import (
@@ -25,9 +26,9 @@ TOTAL_STEPS = 8
 STROOP_COLORS = {
     "Red": "#d64545",
     "Blue": "#1976d2",
-    "Green": "#16875d",
-    "Yellow": "#d89b00",
 }
+STROOP_KEY_MAP = {"ArrowLeft": "Blue", "ArrowRight": "Red"}
+STROOP_TRIAL_COUNT = 12
 
 
 def start_assessment() -> None:
@@ -310,13 +311,15 @@ def render_estimation() -> None:
         next_step()
 
 
-def _make_stroop_trials(count: int = 8) -> list[dict[str, str]]:
-    words = list(STROOP_COLORS)
-    trials = []
-    for index in range(count):
-        ink = random.choice(words)
-        word = ink if index % 3 == 0 else random.choice([item for item in words if item != ink])
-        trials.append({"word": word, "ink": ink})
+def _make_stroop_trials() -> list[dict[str, str | bool]]:
+    """Build a balanced set of congruent and incongruent two-colour trials."""
+    trials: list[dict[str, str | bool]] = []
+    repetitions = STROOP_TRIAL_COUNT // 4
+    for ink in STROOP_COLORS:
+        other_colour = next(colour for colour in STROOP_COLORS if colour != ink)
+        for _ in range(repetitions):
+            trials.append({"word": ink, "ink": ink, "congruent": True})
+            trials.append({"word": other_colour, "ink": ink, "congruent": False})
     random.shuffle(trials)
     return trials
 
@@ -324,9 +327,32 @@ def _make_stroop_trials(count: int = 8) -> list[dict[str, str]]:
 def render_stroop() -> None:
     assessment_header(7, TOTAL_STEPS, "Colour-word task", "About 1 min")
     if "stroop_trials" not in st.session_state:
-        st.write("Select the colour of the ink, not the word. Respond as accurately and quickly as you can.")
-        _timed_stage('<div><span class="stroop-word" style="color:#1976d2">RED</span><br><small>Correct response: Blue</small></div>')
-        if st.button("Begin 8 trials", type="primary", use_container_width=True):
+        st.write(
+            "Respond to the ink colour, not the written word. Keep one finger on each "
+            "arrow key and respond as quickly and accurately as possible."
+        )
+        st.markdown(
+            """
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin:16px 0">
+                <div class="research-card" style="text-align:center;margin:0">
+                    <strong>Left Arrow</strong><br><span style="color:#1976d2">BLUE ink</span>
+                </div>
+                <div class="research-card" style="text-align:center;margin:0">
+                    <strong>Right Arrow</strong><br><span style="color:#d64545">RED ink</span>
+                </div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+        _timed_stage(
+            '<div><span class="stroop-word" style="color:#1976d2">RED</span>'
+            '<br><small>Correct response: Left Arrow, because the ink is blue.</small></div>'
+        )
+        if st.button(
+            f"Begin {STROOP_TRIAL_COUNT} trials",
+            type="primary",
+            use_container_width=True,
+        ):
             st.session_state.stroop_trials = _make_stroop_trials()
             st.session_state.stroop_index = 0
             st.session_state.stroop_responses = []
@@ -340,23 +366,36 @@ def render_stroop() -> None:
     if index < len(trials):
         trial = trials[index]
         st.progress(index / len(trials))
+        st.caption("Left Arrow = BLUE  |  Right Arrow = RED")
         _timed_stage(
             f'<div class="stroop-word" style="color:{STROOP_COLORS[trial["ink"]]}">{trial["word"].upper()}</div>'
         )
         if st.session_state.stroop_shown_at is None:
             st.session_state.stroop_shown_at = time.monotonic()
-        columns = st.columns(4)
-        selected = None
-        for column, name in zip(columns, STROOP_COLORS):
-            if column.button(name, key=f"stroop_{index}_{name}", use_container_width=True):
-                selected = name
-        if selected:
+
+        listener_key = f"stroop_trial_{index}"
+        hotkeys.activate(
+            [
+                hotkeys.hk("stroop_left", "ArrowLeft", prevent_default=True),
+                hotkeys.hk("stroop_right", "ArrowRight", prevent_default=True),
+            ],
+            key=listener_key,
+        )
+        pressed_key = None
+        if hotkeys.pressed("stroop_left", key=listener_key):
+            pressed_key = "ArrowLeft"
+        elif hotkeys.pressed("stroop_right", key=listener_key):
+            pressed_key = "ArrowRight"
+
+        if pressed_key:
             reaction_ms = (time.monotonic() - st.session_state.stroop_shown_at) * 1000
+            selected_colour = STROOP_KEY_MAP[pressed_key]
             st.session_state.stroop_responses.append(
                 {
                     **trial,
-                    "response": selected,
-                    "correct": selected == trial["ink"],
+                    "response": selected_colour,
+                    "response_key": pressed_key,
+                    "correct": selected_colour == trial["ink"],
                     "reaction_ms": round(reaction_ms, 2),
                 }
             )
@@ -446,4 +485,3 @@ def render_assessment(participant_id: str) -> None:
         render_review(participant_id)
     else:
         renderers[step]()
-
