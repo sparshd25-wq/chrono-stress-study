@@ -3,3 +3,4 @@ pandas>=2.2.0,<3.0
 numpy>=1.26.0,<3.0
 plotly>=6.0.0,<7.0
 openpyxl>=3.1.0,<4.0
+streamlit-hotkeys>=0.6.0,<1.0
