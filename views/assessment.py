@@ -67,7 +67,7 @@ def navigation_back() -> None:
 
 
 def render_context() -> None:
-    assessment_header(1, TOTAL_STEPS, "Current context")
+    assessment_header(5, TOTAL_STEPS, "Current context")
     st.write("Tell us about the setting around this assessment.")
     answers = st.session_state.assessment_answers
     with st.form("context_form"):
@@ -102,7 +102,7 @@ def _vas(label: str, help_text: str, default: int) -> int:
 
 
 def render_scales() -> None:
-    assessment_header(2, TOTAL_STEPS, "Current experience")
+    assessment_header(6, TOTAL_STEPS, "Current experience")
     st.write("Move each marker to the point that best reflects how you feel right now.")
     answers = st.session_state.assessment_answers
     with st.form("scales_form"):
@@ -128,7 +128,7 @@ def render_scales() -> None:
 
 
 def render_event() -> None:
-    assessment_header(3, TOTAL_STEPS, "Since the previous assessment")
+    assessment_header(7, TOTAL_STEPS, "Since the previous assessment")
     answers = st.session_state.assessment_answers
     happened = st.radio(
         "Has anything stressful happened since your previous assessment?",
@@ -166,7 +166,7 @@ def _timed_stage(content: str) -> None:
 
 
 def render_reproduction() -> None:
-    assessment_header(4, TOTAL_STEPS, "Time reproduction", "Under 1 min")
+    assessment_header(1, TOTAL_STEPS, "Time reproduction", "Under 1 min")
     phase = st.session_state.get("task_reproduction_phase", "ready")
 
     if phase == "ready":
@@ -231,7 +231,7 @@ def render_reproduction() -> None:
 
 
 def render_prospective() -> None:
-    assessment_header(5, TOTAL_STEPS, "Prospective timing", "About 1 min")
+    assessment_header(2, TOTAL_STEPS, "Prospective timing", "About 1 min")
     phase = st.session_state.get("task_prospective_phase", "ready")
     if phase == "ready":
         st.write("Without counting, press Finish when you believe 30 seconds have elapsed.")
@@ -265,7 +265,7 @@ def render_prospective() -> None:
 
 
 def render_estimation() -> None:
-    assessment_header(6, TOTAL_STEPS, "Time estimation", "Under 1 min")
+    assessment_header(3, TOTAL_STEPS, "Time estimation", "Under 1 min")
     phase = st.session_state.get("task_estimation_phase", "ready")
     if phase == "ready":
         st.write("Watch the visual pulse. You will estimate how long it was displayed.")
@@ -326,7 +326,7 @@ def _make_stroop_trials() -> list[dict[str, str | bool]]:
 
 
 def render_stroop() -> None:
-    assessment_header(7, TOTAL_STEPS, "Colour-word task", "About 1 min")
+    assessment_header(4, TOTAL_STEPS, "Colour-word task", "About 1 min")
     if "stroop_trials" not in st.session_state:
         st.write(
             "Respond to the ink colour, not the written word. Keep one finger on each "
@@ -509,13 +509,13 @@ def render_assessment(participant_id: str) -> None:
 
     step = st.session_state.assessment_step
     renderers: dict[int, Any] = {
-        1: render_context,
-        2: render_scales,
-        3: render_event,
-        4: render_reproduction,
-        5: render_prospective,
-        6: render_estimation,
-        7: render_stroop,
+        1: render_reproduction,
+        2: render_prospective,
+        3: render_estimation,
+        4: render_stroop,
+        5: render_context,
+        6: render_scales,
+        7: render_event,
     }
     if step == 8:
         render_review(participant_id)
