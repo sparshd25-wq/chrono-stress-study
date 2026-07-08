@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from io import BytesIO
 import random
 import time
 from typing import Any
+import wave
 
 import numpy as np
 import streamlit as st
@@ -29,7 +31,9 @@ STROOP_COLORS = {
 }
 STROOP_KEY_MAP = {"ArrowLeft": "Blue", "ArrowRight": "Red"}
 STROOP_TRIAL_COUNT = 12
-STROOP_TRIAL_DURATION_SECONDS = 1.5  # each trial auto-advances after this long, response or not
+COUNTING_OPTIONS = ("Not at all", "Occasionally", "Frequently", "Continuously")
+TONE_SAMPLE_RATE = 16_000
+TONE_DURATION_SECONDS = 0.12
 
 
 def start_assessment() -> None:
@@ -67,7 +71,7 @@ def navigation_back() -> None:
 
 
 def render_context() -> None:
-    assessment_header(5, TOTAL_STEPS, "Current context")
+    assessment_header(1, TOTAL_STEPS, "Current context")
     st.write("Tell us about the setting around this assessment.")
     answers = st.session_state.assessment_answers
     with st.form("context_form"):
@@ -102,7 +106,7 @@ def _vas(label: str, help_text: str, default: int) -> int:
 
 
 def render_scales() -> None:
-    assessment_header(6, TOTAL_STEPS, "Current experience")
+    assessment_header(2, TOTAL_STEPS, "Current experience")
     st.write("Move each marker to the point that best reflects how you feel right now.")
     answers = st.session_state.assessment_answers
     with st.form("scales_form"):
@@ -128,7 +132,7 @@ def render_scales() -> None:
 
 
 def render_event() -> None:
-    assessment_header(7, TOTAL_STEPS, "Since the previous assessment")
+    assessment_header(3, TOTAL_STEPS, "Since the previous assessment")
     answers = st.session_state.assessment_answers
     happened = st.radio(
         "Has anything stressful happened since your previous assessment?",
@@ -165,8 +169,96 @@ def _timed_stage(content: str) -> None:
     st.markdown(f'<div class="task-stage">{content}</div>', unsafe_allow_html=True)
 
 
+def _append_time_task(result: dict[str, Any], metadata: dict[str, Any]) -> None:
+    """Commit a completed timing result with its post-task monitoring response."""
+    result["metadata"] = metadata
+    # Back-navigation can revisit a completed task; update its report without
+    # duplicating the behavioural result in the eventual database transaction.
+    if result not in st.session_state.time_task_results:
+        st.session_state.time_task_results.append(result)
+
+
+def _build_oddball_trial() -> tuple[bytes, int]:
+    """Create a hidden 30-second oddball stream with unpredictable 2-5 s ITIs."""
+    target_count = random.randint(2, 5)
+    tone_count = target_count + 8  # Keep standards more frequent than targets.
+    first_tone = random.uniform(0.4, 1.0)
+
+    raw_intervals = [random.uniform(2.0, 5.0) for _ in range(tone_count - 1)]
+    available = random.uniform(27.0, 29.0) - first_tone
+    minimum = 2.0 * len(raw_intervals)
+    excess = sum(interval - 2.0 for interval in raw_intervals)
+    scale = min(1.0, (available - minimum) / excess) if excess else 1.0
+    intervals = [2.0 + (interval - 2.0) * scale for interval in raw_intervals]
+
+    onset_times = [first_tone]
+    for interval in intervals:
+        onset_times.append(onset_times[-1] + interval)
+    target_indices = set(random.sample(range(tone_count), target_count))
+
+    # A WAV stream is generated locally so no recordings or external audio assets
+    # are required. Brief fades prevent clicks that could become extra cues.
+    samples = np.zeros(30 * TONE_SAMPLE_RATE, dtype=np.float32)
+    tone_length = int(TONE_DURATION_SECONDS * TONE_SAMPLE_RATE)
+    tone_time = np.arange(tone_length) / TONE_SAMPLE_RATE
+    fade_length = int(0.008 * TONE_SAMPLE_RATE)
+    envelope = np.ones(tone_length, dtype=np.float32)
+    envelope[:fade_length] = np.linspace(0.0, 1.0, fade_length)
+    envelope[-fade_length:] = np.linspace(1.0, 0.0, fade_length)
+    for index, onset in enumerate(onset_times):
+        frequency = 1200 if index in target_indices else 800
+        tone = 0.28 * np.sin(2 * np.pi * frequency * tone_time) * envelope
+        start = int(onset * TONE_SAMPLE_RATE)
+        samples[start:start + tone_length] += tone
+
+    output = BytesIO()
+    with wave.open(output, "wb") as wav_file:
+        wav_file.setnchannels(1)
+        wav_file.setsampwidth(2)
+        wav_file.setframerate(TONE_SAMPLE_RATE)
+        wav_file.writeframes((samples * 32767).astype("<i2").tobytes())
+    return output.getvalue(), target_count
+
+
+def _make_irregular_pulse_plan(duration: float) -> list[dict[str, float]]:
+    """Pre-generate smooth pulses with independently jittered pulse/rest times."""
+    plan: list[dict[str, float]] = []
+    start = 0.0
+    while start < duration + 1.0:
+        pulse_duration = random.uniform(0.48, 0.78)
+        grow_duration = pulse_duration * random.uniform(0.42, 0.58)
+        plan.append(
+            {
+                "start": start,
+                "grow": grow_duration,
+                "shrink": pulse_duration - grow_duration,
+            }
+        )
+        # Independent onset gaps remove the regular beat while preserving the pulse.
+        start += pulse_duration + random.uniform(0.18, 0.46)
+    return plan
+
+
+def _irregular_pulse_style(elapsed: float, plan: list[dict[str, float]]) -> str:
+    """Return an eased pulse state for the current point in the random plan."""
+    scale = 0.72
+    for pulse in plan:
+        local_time = elapsed - pulse["start"]
+        pulse_duration = pulse["grow"] + pulse["shrink"]
+        if 0.0 <= local_time <= pulse_duration:
+            if local_time <= pulse["grow"]:
+                progress = local_time / pulse["grow"]
+            else:
+                progress = 1.0 - (local_time - pulse["grow"]) / pulse["shrink"]
+            eased = 0.5 - 0.5 * np.cos(np.pi * progress)
+            scale = 0.72 + 0.28 * eased
+            break
+    opacity = 0.65 + (scale - 0.72) * (0.35 / 0.28)
+    return f"transform:scale({scale:.4f});opacity:{opacity:.4f}"
+
+
 def render_reproduction() -> None:
-    assessment_header(1, TOTAL_STEPS, "Time reproduction", "Under 1 min")
+    assessment_header(4, TOTAL_STEPS, "Time reproduction", "Under 1 min")
     phase = st.session_state.get("task_reproduction_phase", "ready")
 
     if phase == "ready":
@@ -212,66 +304,100 @@ def render_reproduction() -> None:
             response = time.monotonic() - st.session_state.task_reproduction_started
             target = st.session_state.task_reproduction_target
             signed = response - target
-            st.session_state.time_task_results.append(
-                {
-                    "task_type": "time_reproduction",
-                    "target_seconds": target,
-                    "response_seconds": response,
-                    "signed_error": signed,
-                    "absolute_error": abs(signed),
-                }
-            )
+            st.session_state.task_reproduction_result = {
+                "task_type": "time_reproduction",
+                "target_seconds": target,
+                "response_seconds": response,
+                "signed_error": signed,
+                "absolute_error": abs(signed),
+            }
             st.session_state.task_reproduction_phase = "done"
             st.rerun()
         return
 
     _timed_stage("<div><strong>Response recorded</strong><br><small>Your result remains blinded until submission.</small></div>")
-    if st.button("Continue", type="primary", use_container_width=True):
+    # Measuring strategy use after the response avoids altering the reproduction itself.
+    with st.form("reproduction_counting_report"):
+        counting = st.radio("Did you intentionally count during this task?", COUNTING_OPTIONS)
+        submitted = st.form_submit_button("Continue", type="primary", use_container_width=True)
+    if submitted:
+        _append_time_task(
+            st.session_state.task_reproduction_result,
+            {"intentional_counting": counting},
+        )
         next_step()
 
 
 def render_prospective() -> None:
-    assessment_header(2, TOTAL_STEPS, "Prospective timing", "About 1 min")
+    assessment_header(5, TOTAL_STEPS, "Prospective timing", "About 1 min")
     phase = st.session_state.get("task_prospective_phase", "ready")
     if phase == "ready":
         st.write("Without counting, press Finish when you believe 30 seconds have elapsed.")
+        st.write(
+            "While estimating the interval, also pay attention to the sounds and remember "
+            "how many high-pitched tones you hear."
+        )
         _timed_stage("<div><strong>The display will not show elapsed time.</strong></div>")
         if st.button("Start 30-second task", type="primary", use_container_width=True):
+            audio, target_count = _build_oddball_trial()
+            st.session_state.task_prospective_audio = audio
+            st.session_state.task_prospective_target_count = target_count
             st.session_state.task_prospective_started = time.monotonic()
             st.session_state.task_prospective_phase = "recording"
             st.rerun()
         navigation_back()
         return
     if phase == "recording":
+        # Hide playback controls so the audio stream cannot reveal elapsed time.
+        st.markdown(
+            "<style>div[data-testid='stAudio']{display:none}</style>",
+            unsafe_allow_html=True,
+        )
+        st.audio(st.session_state.task_prospective_audio, format="audio/wav", autoplay=True)
         _timed_stage("<div><strong>Timing in progress</strong><br><small>Respond when you think 30 seconds have passed.</small></div>")
         if st.button("Finish", type="primary", use_container_width=True):
             response = time.monotonic() - st.session_state.task_prospective_started
             signed = response - 30.0
-            st.session_state.time_task_results.append(
-                {
-                    "task_type": "prospective_timing",
-                    "target_seconds": 30.0,
-                    "response_seconds": response,
-                    "signed_error": signed,
-                    "absolute_error": abs(signed),
-                }
-            )
+            st.session_state.task_prospective_result = {
+                "task_type": "prospective_timing",
+                "target_seconds": 30.0,
+                "response_seconds": response,
+                "signed_error": signed,
+                "absolute_error": abs(signed),
+            }
             st.session_state.task_prospective_phase = "done"
             st.rerun()
         return
     _timed_stage("<div><strong>Response recorded</strong></div>")
-    if st.button("Continue", type="primary", use_container_width=True):
+    with st.form("prospective_auditory_report"):
+        reported_count = st.number_input(
+            "How many high-pitched tones did you hear?", 0, 20, 0, 1
+        )
+        submitted = st.form_submit_button("Continue", type="primary", use_container_width=True)
+    if submitted:
+        target_count = st.session_state.task_prospective_target_count
+        _append_time_task(
+            st.session_state.task_prospective_result,
+            {
+                "target_tone_count": target_count,
+                "participant_reported_count": int(reported_count),
+                "auditory_monitoring_accuracy": int(reported_count == target_count),
+            },
+        )
         next_step()
 
 
 def render_estimation() -> None:
-    assessment_header(3, TOTAL_STEPS, "Time estimation", "Under 1 min")
+    assessment_header(6, TOTAL_STEPS, "Time estimation", "Under 1 min")
     phase = st.session_state.get("task_estimation_phase", "ready")
     if phase == "ready":
         st.write("Watch the visual pulse. You will estimate how long it was displayed.")
         _timed_stage("<div><strong>Focus on the visual display.</strong></div>")
         if st.button("Begin display", type="primary", use_container_width=True):
             st.session_state.task_estimation_target = random.uniform(5.0, 10.0)
+            st.session_state.task_estimation_pulse_plan = _make_irregular_pulse_plan(
+                st.session_state.task_estimation_target
+            )
             st.session_state.task_estimation_started = time.monotonic()
             st.session_state.task_estimation_phase = "display"
             st.rerun()
@@ -280,8 +406,15 @@ def render_estimation() -> None:
     if phase == "display":
         target = st.session_state.task_estimation_target
         elapsed = time.monotonic() - st.session_state.task_estimation_started
-        _timed_stage('<div class="stimulus-circle" style="animation:pulse 1s ease-in-out infinite alternate"></div>')
-        st.markdown("<style>@keyframes pulse { from {transform:scale(.72); opacity:.65} to {transform:scale(1); opacity:1} }</style>", unsafe_allow_html=True)
+        # Sample a pre-generated irregular pulse plan: cosine easing keeps motion
+        # smooth while jittered pulse/rest durations prevent rhythmic entrainment.
+        pulse_style = _irregular_pulse_style(
+            elapsed, st.session_state.task_estimation_pulse_plan
+        )
+        _timed_stage(
+            f'<div class="stimulus-circle" style="{pulse_style};'
+            'transition:transform .1s linear,opacity .1s linear"></div>'
+        )
         if elapsed >= target:
             st.session_state.task_estimation_phase = "respond"
             st.rerun()
@@ -295,20 +428,25 @@ def render_estimation() -> None:
         if submitted:
             target = st.session_state.task_estimation_target
             signed = estimate - target
-            st.session_state.time_task_results.append(
-                {
-                    "task_type": "time_estimation",
-                    "target_seconds": target,
-                    "response_seconds": estimate,
-                    "signed_error": signed,
-                    "absolute_error": abs(signed),
-                }
-            )
+            st.session_state.task_estimation_result = {
+                "task_type": "time_estimation",
+                "target_seconds": target,
+                "response_seconds": estimate,
+                "signed_error": signed,
+                "absolute_error": abs(signed),
+            }
             st.session_state.task_estimation_phase = "done"
             st.rerun()
         return
     _timed_stage("<div><strong>Estimate recorded</strong></div>")
-    if st.button("Continue", type="primary", use_container_width=True):
+    with st.form("estimation_counting_report"):
+        counting = st.radio("Did you intentionally count during this task?", COUNTING_OPTIONS)
+        submitted = st.form_submit_button("Continue", type="primary", use_container_width=True)
+    if submitted:
+        _append_time_task(
+            st.session_state.task_estimation_result,
+            {"intentional_counting": counting},
+        )
         next_step()
 
 
@@ -326,7 +464,7 @@ def _make_stroop_trials() -> list[dict[str, str | bool]]:
 
 
 def render_stroop() -> None:
-    assessment_header(4, TOTAL_STEPS, "Colour-word task", "About 1 min")
+    assessment_header(7, TOTAL_STEPS, "Colour-word task", "About 1 min")
     if "stroop_trials" not in st.session_state:
         st.write(
             "Respond to the ink colour, not the written word. Keep one finger on each "
@@ -388,10 +526,8 @@ def render_stroop() -> None:
         elif hotkeys.pressed("stroop_right", key=listener_key):
             pressed_key = "ArrowRight"
 
-        elapsed_trial = time.monotonic() - st.session_state.stroop_shown_at
-
         if pressed_key:
-            reaction_ms = elapsed_trial * 1000
+            reaction_ms = (time.monotonic() - st.session_state.stroop_shown_at) * 1000
             selected_colour = STROOP_KEY_MAP[pressed_key]
             st.session_state.stroop_responses.append(
                 {
@@ -400,57 +536,24 @@ def render_stroop() -> None:
                     "response_key": pressed_key,
                     "correct": selected_colour == trial["ink"],
                     "reaction_ms": round(reaction_ms, 2),
-                    "timed_out": False,
                 }
             )
             st.session_state.stroop_index += 1
             st.session_state.stroop_shown_at = None
             st.rerun()
-            return
-
-        if elapsed_trial >= STROOP_TRIAL_DURATION_SECONDS:
-            # No key press within the trial window — record it as a genuine
-            # miss (distinct from an incorrect key press) and auto-advance.
-            st.session_state.stroop_responses.append(
-                {
-                    **trial,
-                    "response": None,
-                    "response_key": None,
-                    "correct": False,
-                    "reaction_ms": None,
-                    "timed_out": True,
-                }
-            )
-            st.session_state.stroop_index += 1
-            st.session_state.stroop_shown_at = None
-            st.rerun()
-            return
-
-        # Keep polling every cycle, same pattern as the timing tasks above.
-        # This re-arms the hotkey listener on a fresh rerun each time, so the
-        # trial keeps refreshing whether or not the participant has responded
-        # yet, rather than sitting frozen until some other widget triggers a
-        # rerun. A short interval keeps the auto-advance timing in the line
-        # above accurate at a sub-second trial duration.
-        time.sleep(.03)
-        st.rerun()
         return
 
     responses = st.session_state.stroop_responses
     accuracy = float(np.mean([item["correct"] for item in responses]) * 100)
-    reaction_times = [
-        item["reaction_ms"] for item in responses
-        if item["correct"] and item["reaction_ms"] is not None
-    ]
+    reaction_times = [item["reaction_ms"] for item in responses if item["correct"]]
     mean_reaction = float(np.mean(reaction_times)) if reaction_times else 0.0
-    misses = sum(1 for item in responses if item.get("timed_out"))
-    errors = sum(1 for item in responses if not item["correct"] and not item.get("timed_out"))
+    errors = sum(not item["correct"] for item in responses)
     st.session_state.cognitive_result = {
         "task_type": "stroop",
         "accuracy": accuracy,
         "mean_reaction_ms": mean_reaction,
         "errors": errors,
-        "misses": misses,
+        "misses": 0,
         "false_alarms": 0,
         "trials": responses,
     }
@@ -509,13 +612,13 @@ def render_assessment(participant_id: str) -> None:
 
     step = st.session_state.assessment_step
     renderers: dict[int, Any] = {
-        1: render_reproduction,
-        2: render_prospective,
-        3: render_estimation,
-        4: render_stroop,
-        5: render_context,
-        6: render_scales,
-        7: render_event,
+        1: render_context,
+        2: render_scales,
+        3: render_event,
+        4: render_reproduction,
+        5: render_prospective,
+        6: render_estimation,
+        7: render_stroop,
     }
     if step == 8:
         render_review(participant_id)
