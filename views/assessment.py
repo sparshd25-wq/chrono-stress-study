@@ -33,7 +33,10 @@ STROOP_KEY_MAP = {"ArrowLeft": "Blue", "ArrowRight": "Red"}
 STROOP_TRIAL_COUNT = 12
 COUNTING_OPTIONS = ("Not at all", "Occasionally", "Frequently", "Continuously")
 TONE_SAMPLE_RATE = 16_000
-TONE_DURATION_SECONDS = 0.12
+STANDARD_TONE_DURATION_SECONDS = 0.25
+TARGET_TONE_DURATION_SECONDS = 0.35
+STANDARD_TONE_AMPLITUDE = 0.42
+TARGET_TONE_AMPLITUDE = 0.56
 
 
 def start_assessment() -> None:
@@ -71,7 +74,7 @@ def navigation_back() -> None:
 
 
 def render_context() -> None:
-    assessment_header(1, TOTAL_STEPS, "Current context")
+    assessment_header(5, TOTAL_STEPS, "Current context")
     st.write("Tell us about the setting around this assessment.")
     answers = st.session_state.assessment_answers
     with st.form("context_form"):
@@ -106,7 +109,7 @@ def _vas(label: str, help_text: str, default: int) -> int:
 
 
 def render_scales() -> None:
-    assessment_header(2, TOTAL_STEPS, "Current experience")
+    assessment_header(6, TOTAL_STEPS, "Current experience")
     st.write("Move each marker to the point that best reflects how you feel right now.")
     answers = st.session_state.assessment_answers
     with st.form("scales_form"):
@@ -132,7 +135,7 @@ def render_scales() -> None:
 
 
 def render_event() -> None:
-    assessment_header(3, TOTAL_STEPS, "Since the previous assessment")
+    assessment_header(7, TOTAL_STEPS, "Since the previous assessment")
     answers = st.session_state.assessment_answers
     happened = st.radio(
         "Has anything stressful happened since your previous assessment?",
@@ -199,17 +202,27 @@ def _build_oddball_trial() -> tuple[bytes, int]:
     target_indices = set(random.sample(range(tone_count), target_count))
 
     # A WAV stream is generated locally so no recordings or external audio assets
-    # are required. Brief fades prevent clicks that could become extra cues.
+    # are required. Normalized attack/decay envelopes improve laptop audibility
+    # without clicks, and make targets clearly distinct without becoming harsh.
     samples = np.zeros(30 * TONE_SAMPLE_RATE, dtype=np.float32)
-    tone_length = int(TONE_DURATION_SECONDS * TONE_SAMPLE_RATE)
-    tone_time = np.arange(tone_length) / TONE_SAMPLE_RATE
-    fade_length = int(0.008 * TONE_SAMPLE_RATE)
-    envelope = np.ones(tone_length, dtype=np.float32)
-    envelope[:fade_length] = np.linspace(0.0, 1.0, fade_length)
-    envelope[-fade_length:] = np.linspace(1.0, 0.0, fade_length)
     for index, onset in enumerate(onset_times):
-        frequency = 1200 if index in target_indices else 800
-        tone = 0.28 * np.sin(2 * np.pi * frequency * tone_time) * envelope
+        is_target = index in target_indices
+        frequency = 1200 if is_target else 800
+        duration = (
+            TARGET_TONE_DURATION_SECONDS if is_target
+            else STANDARD_TONE_DURATION_SECONDS
+        )
+        amplitude = TARGET_TONE_AMPLITUDE if is_target else STANDARD_TONE_AMPLITUDE
+        tone_length = int(duration * TONE_SAMPLE_RATE)
+        tone_time = np.arange(tone_length) / TONE_SAMPLE_RATE
+        fade_length = int(0.02 * TONE_SAMPLE_RATE)
+        fade = 0.5 - 0.5 * np.cos(np.linspace(0.0, np.pi, fade_length))
+        envelope = np.ones(tone_length, dtype=np.float32)
+        envelope[:fade_length] = fade
+        envelope[-fade_length:] = fade[::-1]
+        tone = np.sin(2 * np.pi * frequency * tone_time) * envelope
+        tone /= np.max(np.abs(tone))
+        tone *= amplitude
         start = int(onset * TONE_SAMPLE_RATE)
         samples[start:start + tone_length] += tone
 
@@ -260,7 +273,7 @@ def _irregular_pulse_style(elapsed: float, plan: list[dict[str, float]]) -> str:
 
 
 def render_reproduction() -> None:
-    assessment_header(4, TOTAL_STEPS, "Time reproduction", "Under 1 min")
+    assessment_header(1, TOTAL_STEPS, "Time reproduction", "Under 1 min")
     phase = st.session_state.get("task_reproduction_phase", "ready")
 
     if phase == "ready":
@@ -331,7 +344,7 @@ def render_reproduction() -> None:
 
 
 def render_prospective() -> None:
-    assessment_header(5, TOTAL_STEPS, "Prospective timing", "About 1 min")
+    assessment_header(2, TOTAL_STEPS, "Prospective timing", "About 1 min")
     phase = st.session_state.get("task_prospective_phase", "ready")
     if phase == "ready":
         st.write("Without counting, press Finish when you believe 30 seconds have elapsed.")
@@ -375,6 +388,7 @@ def render_prospective() -> None:
         reported_count = st.number_input(
             "How many high-pitched tones did you hear?", 0, 20, 0, 1
         )
+        counting = st.radio("Did you intentionally count during this task?", COUNTING_OPTIONS)
         submitted = st.form_submit_button("Continue", type="primary", use_container_width=True)
     if submitted:
         target_count = st.session_state.task_prospective_target_count
@@ -384,13 +398,14 @@ def render_prospective() -> None:
                 "actual_target_count": target_count,
                 "participant_reported_target_count": int(reported_count),
                 "oddball_accuracy": int(reported_count == target_count),
+                "intentional_counting": counting,
             },
         )
         next_step()
 
 
 def render_estimation() -> None:
-    assessment_header(6, TOTAL_STEPS, "Time estimation", "Under 1 min")
+    assessment_header(3, TOTAL_STEPS, "Time estimation", "Under 1 min")
     phase = st.session_state.get("task_estimation_phase", "ready")
     if phase == "ready":
         st.write("Watch the visual pulse. You will estimate how long it was displayed.")
@@ -466,7 +481,7 @@ def _make_stroop_trials() -> list[dict[str, str | bool]]:
 
 
 def render_stroop() -> None:
-    assessment_header(7, TOTAL_STEPS, "Colour-word task", "About 1 min")
+    assessment_header(4, TOTAL_STEPS, "Colour-word task", "About 1 min")
     if "stroop_trials" not in st.session_state:
         st.write(
             "Respond to the ink colour, not the written word. Keep one finger on each "
@@ -614,13 +629,13 @@ def render_assessment(participant_id: str) -> None:
 
     step = st.session_state.assessment_step
     renderers: dict[int, Any] = {
-        1: render_context,
-        2: render_scales,
-        3: render_event,
-        4: render_reproduction,
-        5: render_prospective,
-        6: render_estimation,
-        7: render_stroop,
+        1: render_reproduction,
+        2: render_prospective,
+        3: render_estimation,
+        4: render_stroop,
+        5: render_context,
+        6: render_scales,
+        7: render_event,
     }
     if step == 8:
         render_review(participant_id)
