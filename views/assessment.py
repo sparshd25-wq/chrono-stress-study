@@ -181,7 +181,9 @@ def _append_time_task(result: dict[str, Any], metadata: dict[str, Any]) -> None:
 def _build_oddball_trial() -> tuple[bytes, int]:
     """Create a hidden 30-second oddball stream with unpredictable 2-5 s ITIs."""
     target_count = random.randint(2, 5)
-    tone_count = target_count + 8  # Keep standards more frequent than targets.
+    # Eight standards keep targets infrequent and make monitoring sufficient to
+    # disrupt explicit counting without replacing prospective timing as the task.
+    tone_count = target_count + 8
     first_tone = random.uniform(0.4, 1.0)
 
     raw_intervals = [random.uniform(2.0, 5.0) for _ in range(tone_count - 1)]
@@ -334,7 +336,7 @@ def render_prospective() -> None:
     if phase == "ready":
         st.write("Without counting, press Finish when you believe 30 seconds have elapsed.")
         st.write(
-            "While estimating the interval, also pay attention to the sounds and remember "
+            "While estimating the interval, also monitor the sounds and remember "
             "how many high-pitched tones you hear."
         )
         _timed_stage("<div><strong>The display will not show elapsed time.</strong></div>")
@@ -379,9 +381,9 @@ def render_prospective() -> None:
         _append_time_task(
             st.session_state.task_prospective_result,
             {
-                "target_tone_count": target_count,
-                "participant_reported_count": int(reported_count),
-                "auditory_monitoring_accuracy": int(reported_count == target_count),
+                "actual_target_count": target_count,
+                "participant_reported_target_count": int(reported_count),
+                "oddball_accuracy": int(reported_count == target_count),
             },
         )
         next_step()
