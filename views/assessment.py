@@ -12,6 +12,7 @@ import wave
 import numpy as np
 import streamlit as st
 import streamlit_hotkeys as hotkeys
+from streamlit.components import v2 as components_v2
 
 from components.ui import assessment_header
 from config import (
@@ -37,6 +38,144 @@ STANDARD_TONE_DURATION_SECONDS = 0.25
 TARGET_TONE_DURATION_SECONDS = 0.35
 STANDARD_TONE_AMPLITUDE = 0.42
 TARGET_TONE_AMPLITUDE = 0.56
+
+
+HOLD_REPRODUCTION_COMPONENT = components_v2.component(
+    "hold_to_reproduce",
+    html='<button type="button" class="hold-button"><span>HOLD TO REPRODUCE</span></button>',
+    css="""
+        :host { display: flex; justify-content: center; padding: 14px 0 22px; }
+        .hold-button {
+            align-items: center;
+            background: #1976d2;
+            border: 0;
+            border-radius: 50%;
+            box-shadow: 0 0 0 12px rgba(25, 118, 210, .09),
+                        0 10px 28px rgba(25, 118, 210, .22);
+            color: white;
+            cursor: pointer;
+            display: flex;
+            font: 700 16px/1.25 Inter, Arial, sans-serif;
+            height: 210px;
+            justify-content: center;
+            letter-spacing: .04em;
+            overflow: hidden;
+            padding: 34px;
+            position: relative;
+            text-align: center;
+            touch-action: none;
+            user-select: none;
+            width: 210px;
+            -webkit-tap-highlight-color: transparent;
+        }
+        .hold-button::before {
+            background: rgba(255, 255, 255, .18);
+            border-radius: 50%;
+            content: "";
+            inset: 50%;
+            position: absolute;
+            transition: inset .22s ease;
+        }
+        .hold-button span { position: relative; z-index: 1; }
+        .hold-button.holding {
+            animation: held-pulse 1.1s ease-in-out infinite alternate;
+            box-shadow: 0 0 0 16px rgba(25, 118, 210, .12),
+                        0 0 34px rgba(25, 118, 210, .46);
+        }
+        .hold-button.holding::before { inset: 7%; }
+        @keyframes held-pulse {
+            from { transform: scale(.97); }
+            to { transform: scale(1.03); }
+        }
+    """,
+    js="""
+        export default function(component) {
+            const { parentElement, setTriggerValue } = component;
+            const button = parentElement.querySelector('.hold-button');
+            let startedAt = null;
+
+            const begin = (event) => {
+                event.preventDefault();
+                if (startedAt !== null) return;
+                startedAt = performance.now();
+                button.classList.add('holding');
+                if (event.pointerId !== undefined) {
+                    button.setPointerCapture(event.pointerId);
+                }
+            };
+            const finish = (event) => {
+                event.preventDefault();
+                if (startedAt === null) return;
+                const durationMs = performance.now() - startedAt;
+                startedAt = null;
+                button.classList.remove('holding');
+                setTriggerValue('duration_ms', Math.round(durationMs));
+            };
+            const cancel = () => {
+                startedAt = null;
+                button.classList.remove('holding');
+            };
+
+            button.addEventListener('pointerdown', begin);
+            button.addEventListener('pointerup', finish);
+            button.addEventListener('pointercancel', cancel);
+            button.addEventListener('contextmenu', (event) => event.preventDefault());
+            button.addEventListener('keydown', (event) => {
+                if ((event.key === ' ' || event.key === 'Enter') && !event.repeat) begin(event);
+            });
+            button.addEventListener('keyup', (event) => {
+                if (event.key === ' ' || event.key === 'Enter') finish(event);
+            });
+
+            return () => {
+                button.replaceWith(button.cloneNode(true));
+            };
+        }
+    """,
+)
+
+
+SUBJECTIVE_DURATION_COMPONENT = components_v2.component(
+    "subjective_duration_slider",
+    html="""
+        <div class="duration-match">
+            <div class="duration-labels">
+                <span>Passed Very Quickly</span>
+                <span>Passed Very Slowly</span>
+            </div>
+            <input class="duration-slider" type="range" min="0" max="100" step="1"
+                   value="50" aria-label="How long the interval felt">
+        </div>
+    """,
+    css="""
+        .duration-match { padding: 20px 8px 12px; }
+        .duration-labels {
+            color: #334e68;
+            display: flex;
+            font: 600 14px/1.35 Inter, Arial, sans-serif;
+            justify-content: space-between;
+            margin-bottom: 18px;
+        }
+        .duration-labels span:last-child { text-align: right; }
+        .duration-slider {
+            accent-color: #1976d2;
+            cursor: pointer;
+            height: 40px;
+            margin: 0;
+            touch-action: pan-x;
+            width: 100%;
+        }
+    """,
+    js="""
+        export default function(component) {
+            const { parentElement, setStateValue } = component;
+            const slider = parentElement.querySelector('.duration-slider');
+            slider.addEventListener('change', () => {
+                setStateValue('position', Number(slider.value));
+            });
+        }
+    """,
+)
 
 
 def start_assessment() -> None:
@@ -73,7 +212,48 @@ def navigation_back() -> None:
         previous_step()
 
 
+def render_counting_questions() -> None:
+    """Collect strategy reports only after every behavioural task is complete."""
+    assessment_header(5, TOTAL_STEPS, "Counting strategies", "Under 1 min")
+    st.write("Please report any counting strategies you used during the completed tasks.")
+    with st.form("post_task_counting_report"):
+        reproduction_counting = st.radio(
+            "Did you intentionally count during the interval reproduction task?",
+            COUNTING_OPTIONS,
+        )
+        prospective_counting = st.radio(
+            "Did you intentionally count during the 30-second task?",
+            COUNTING_OPTIONS,
+        )
+        pulse_counting = st.radio(
+            "Did you intentionally count during the visual pulse task?",
+            COUNTING_OPTIONS,
+        )
+        submitted = st.form_submit_button(
+            "Continue", type="primary", use_container_width=True
+        )
+    if submitted:
+        _append_time_task(
+            st.session_state.task_reproduction_result,
+            {"intentional_counting": reproduction_counting},
+        )
+        _append_time_task(
+            st.session_state.task_prospective_result,
+            {"intentional_counting": prospective_counting},
+        )
+        _append_time_task(
+            st.session_state.task_estimation_result,
+            {"intentional_counting": pulse_counting},
+        )
+        st.session_state.task_counting_complete = True
+        st.rerun()
+
+
 def render_context() -> None:
+    if not st.session_state.get("task_counting_complete", False):
+        render_counting_questions()
+        return
+
     assessment_header(5, TOTAL_STEPS, "Current context")
     st.write("Tell us about the setting around this assessment.")
     answers = st.session_state.assessment_answers
@@ -113,10 +293,11 @@ def render_scales() -> None:
     st.write("Move each marker to the point that best reflects how you feel right now.")
     answers = st.session_state.assessment_answers
     with st.form("scales_form"):
-        stress = _vas("How stressed do you feel?", "0 = not at all, 100 = extremely", int(answers.get("stress", 50)))
         fatigue = _vas("How mentally exhausted are you?", "0 = not at all, 100 = extremely", int(answers.get("mental_fatigue", 50)))
         arousal = _vas("How emotionally activated or overwhelmed are you?", "0 = calm, 100 = extremely activated", int(answers.get("emotional_arousal", 50)))
         control = _vas("How much control do you currently feel?", "0 = no control, 100 = complete control", int(answers.get("perceived_control", 50)))
+        st.markdown("#### Stress scales")
+        stress = _vas("How stressed do you feel?", "0 = not at all, 100 = extremely", int(answers.get("stress", 50)))
         anxiety = _vas("How anxious do you currently feel?", "0 = not at all, 100 = extremely", int(answers.get("anxiety", 40)))
         left, right = st.columns(2)
         back = left.form_submit_button("Back", use_container_width=True)
@@ -174,7 +355,7 @@ def _timed_stage(content: str) -> None:
 
 def _append_time_task(result: dict[str, Any], metadata: dict[str, Any]) -> None:
     """Commit a completed timing result with its post-task monitoring response."""
-    result["metadata"] = metadata
+    result.setdefault("metadata", {}).update(metadata)
     # Back-navigation can revisit a completed task; update its report without
     # duplicating the behavioural result in the eventual database transaction.
     if result not in st.session_state.time_task_results:
@@ -305,18 +486,20 @@ def render_reproduction() -> None:
         st.rerun()
 
     if phase == "respond":
-        _timed_stage("<div><strong>Reproduce the interval</strong><br><small>The clock will remain hidden.</small></div>")
-        st.caption("Select Start, wait for the remembered duration, then select Stop.")
-        if st.button("Start reproduction", type="primary", use_container_width=True):
-            st.session_state.task_reproduction_started = time.monotonic()
-            st.session_state.task_reproduction_phase = "recording"
-            st.rerun()
-        return
-
-    if phase == "recording":
-        _timed_stage("<div><strong>Timing in progress</strong><br><small>Stop when the remembered interval has passed.</small></div>")
-        if st.button("Stop reproduction", type="primary", use_container_width=True):
-            response = time.monotonic() - st.session_state.task_reproduction_started
+        _timed_stage(
+            "<div><strong>Reproduce the interval</strong><br>"
+            "<small>Press and hold, then release after the remembered duration.</small></div>"
+        )
+        # Pointer-down/up timing provides classical reproduction without exposing
+        # a clock, while restrained tactile-style feedback supports mobile use.
+        hold_result = HOLD_REPRODUCTION_COMPONENT(
+            key="reproduction_hold",
+            height=260,
+            on_duration_ms_change=lambda: None,
+        )
+        duration_ms = getattr(hold_result, "duration_ms", None)
+        if duration_ms is not None:
+            response = float(duration_ms) / 1000.0
             target = st.session_state.task_reproduction_target
             signed = response - target
             st.session_state.task_reproduction_result = {
@@ -326,20 +509,13 @@ def render_reproduction() -> None:
                 "signed_error": signed,
                 "absolute_error": abs(signed),
             }
+            _append_time_task(st.session_state.task_reproduction_result, {})
             st.session_state.task_reproduction_phase = "done"
             st.rerun()
         return
 
     _timed_stage("<div><strong>Response recorded</strong><br><small>Your result remains blinded until submission.</small></div>")
-    # Measuring strategy use after the response avoids altering the reproduction itself.
-    with st.form("reproduction_counting_report"):
-        counting = st.radio("Did you intentionally count during this task?", COUNTING_OPTIONS)
-        submitted = st.form_submit_button("Continue", type="primary", use_container_width=True)
-    if submitted:
-        _append_time_task(
-            st.session_state.task_reproduction_result,
-            {"intentional_counting": counting},
-        )
+    if st.button("Continue", type="primary", use_container_width=True):
         next_step()
 
 
@@ -388,7 +564,6 @@ def render_prospective() -> None:
         reported_count = st.number_input(
             "How many high-pitched tones did you hear?", 0, 20, 0, 1
         )
-        counting = st.radio("Did you intentionally count during this task?", COUNTING_OPTIONS)
         submitted = st.form_submit_button("Continue", type="primary", use_container_width=True)
     if submitted:
         target_count = st.session_state.task_prospective_target_count
@@ -398,17 +573,16 @@ def render_prospective() -> None:
                 "actual_target_count": target_count,
                 "participant_reported_target_count": int(reported_count),
                 "oddball_accuracy": int(reported_count == target_count),
-                "intentional_counting": counting,
             },
         )
         next_step()
 
 
 def render_estimation() -> None:
-    assessment_header(3, TOTAL_STEPS, "Time estimation", "Under 1 min")
+    assessment_header(3, TOTAL_STEPS, "Subjective passage of time", "Under 1 min")
     phase = st.session_state.get("task_estimation_phase", "ready")
     if phase == "ready":
-        st.write("Watch the visual pulse. You will estimate how long it was displayed.")
+        st.write("Watch the visual pulse. Afterwards, indicate how long the interval felt.")
         _timed_stage("<div><strong>Focus on the visual display.</strong></div>")
         if st.button("Begin display", type="primary", use_container_width=True):
             st.session_state.task_estimation_target = random.uniform(5.0, 10.0)
@@ -438,32 +612,44 @@ def render_estimation() -> None:
         time.sleep(.08)
         st.rerun()
     if phase == "respond":
-        _timed_stage("<div><strong>How long was the animation displayed?</strong></div>")
-        with st.form("estimation_response"):
-            estimate = st.number_input("Estimated seconds", 0.1, 60.0, 7.0, .1)
-            submitted = st.form_submit_button("Record estimate", type="primary", use_container_width=True)
-        if submitted:
+        _timed_stage(
+            "<div><strong>Move the slider to indicate how long the interval felt.</strong></div>"
+        )
+        # A non-numeric continuum captures experienced passage of time without
+        # prompting conversion into seconds or another chronometric strategy.
+        match_result = SUBJECTIVE_DURATION_COMPONENT(
+            key="subjective_duration_match",
+            default={"position": 50},
+            height=110,
+            on_position_change=lambda: None,
+        )
+        slider_position = float(getattr(match_result, "position", 50))
+        if st.button("Record response", type="primary", use_container_width=True):
             target = st.session_state.task_estimation_target
-            signed = estimate - target
+            normalized_score = slider_position / 100.0
+            centered_score = normalized_score - 0.5
             st.session_state.task_estimation_result = {
-                "task_type": "time_estimation",
+                "task_type": "subjective_passage_matching",
                 "target_seconds": target,
-                "response_seconds": estimate,
-                "signed_error": signed,
-                "absolute_error": abs(signed),
+                # Generic numeric fields remain populated for SQLite/export
+                # compatibility; their unit is normalized rather than seconds.
+                "response_seconds": normalized_score,
+                "signed_error": centered_score,
+                "absolute_error": abs(centered_score),
             }
+            _append_time_task(
+                st.session_state.task_estimation_result,
+                {
+                    "slider_position": slider_position,
+                    "normalized_subjective_duration_score": normalized_score,
+                    "response_measure": "normalized_subjective_duration",
+                },
+            )
             st.session_state.task_estimation_phase = "done"
             st.rerun()
         return
-    _timed_stage("<div><strong>Estimate recorded</strong></div>")
-    with st.form("estimation_counting_report"):
-        counting = st.radio("Did you intentionally count during this task?", COUNTING_OPTIONS)
-        submitted = st.form_submit_button("Continue", type="primary", use_container_width=True)
-    if submitted:
-        _append_time_task(
-            st.session_state.task_estimation_result,
-            {"intentional_counting": counting},
-        )
+    _timed_stage("<div><strong>Response recorded</strong></div>")
+    if st.button("Continue", type="primary", use_container_width=True):
         next_step()
 
 
