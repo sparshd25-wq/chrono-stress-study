@@ -680,10 +680,7 @@ def _make_stroop_trials() -> list[dict[str, str | bool]]:
 
 def render_stroop() -> None:
     assessment_header(4, TOTAL_STEPS, "Colour-word task", "About 1 min")
-    if (
-        "stroop_trials" not in st.session_state
-        or st.session_state.get("stroop_index", 0) >= len(st.session_state.get("stroop_trials", []))
-    ):
+    if "stroop_trials" not in st.session_state or st.session_state.get("stroop_index") is None:
         st.write(
             "Respond to the ink colour, not the written word. Keep one finger on each "
             "arrow key and respond as quickly and accurately as possible."
@@ -705,19 +702,18 @@ def render_stroop() -> None:
             '<div><span class="stroop-word" style="color:#1976d2">RED</span>'
             '<br><small>Correct response: Left Arrow, because the ink is blue.</small></div>'
         )
-        if "stroop_trials" not in st.session_state:
-            if st.button(
-                f"Begin {STROOP_TRIAL_COUNT} trials",
-                type="primary",
-                use_container_width=True,
-            ):
-                st.session_state.stroop_trials = _make_stroop_trials()
-                st.session_state.stroop_index = 0
-                st.session_state.stroop_responses = []
-                st.session_state.stroop_shown_at = None
-                st.rerun()
-            navigation_back()
-            return
+        if st.button(
+            f"Begin {STROOP_TRIAL_COUNT} trials",
+            type="primary",
+            use_container_width=True,
+        ):
+            st.session_state.stroop_trials = _make_stroop_trials()
+            st.session_state.stroop_index = 0
+            st.session_state.stroop_responses = []
+            st.session_state.stroop_shown_at = None
+            st.rerun()
+        navigation_back()
+        return
 
     index = st.session_state.stroop_index
     trials = st.session_state.stroop_trials
