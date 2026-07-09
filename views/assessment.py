@@ -25,7 +25,7 @@ from config import (
 from database.repository import save_assessment
 
 
-TOTAL_STEPS = 8
+TOTAL_STEPS = 9
 STROOP_COLORS = {
     "Red": "#d64545",
     "Blue": "#1976d2",
@@ -174,9 +174,15 @@ SUBJECTIVE_DURATION_COMPONENT = components_v2.component(
         export default function(component) {
             const { parentElement, setStateValue } = component;
             const slider = parentElement.querySelector('.duration-slider');
+            const valueDisplay = parentElement.querySelector('#duration-value');
+            const updateDisplay = () => {
+                valueDisplay.textContent = `${Number(slider.value).toFixed(1)} seconds`;
+            };
+            slider.addEventListener('input', updateDisplay);
             slider.addEventListener('change', () => {
                 setStateValue('position', Number(slider.value));
             });
+            updateDisplay();
         }
     """,
 )
@@ -233,9 +239,13 @@ def render_counting_questions() -> None:
             "Did you intentionally count during the visual pulse task?",
             COUNTING_OPTIONS,
         )
-        submitted = st.form_submit_button(
+        left, right = st.columns(2)
+        back = left.form_submit_button("Back", use_container_width=True)
+        submitted = right.form_submit_button(
             "Continue", type="primary", use_container_width=True
         )
+    if back:
+        previous_step()
     if submitted:
         _append_time_task(
             st.session_state.task_reproduction_result,
@@ -249,16 +259,11 @@ def render_counting_questions() -> None:
             st.session_state.task_estimation_result,
             {"intentional_counting": pulse_counting},
         )
-        st.session_state.task_counting_complete = True
-        st.rerun()
+        next_step()
 
 
 def render_context() -> None:
-    if not st.session_state.get("task_counting_complete", False):
-        render_counting_questions()
-        return
-
-    assessment_header(5, TOTAL_STEPS, "Current context")
+    assessment_header(6, TOTAL_STEPS, "Current context")
     st.write("Tell us about the setting around this assessment.")
     answers = st.session_state.assessment_answers
     with st.form("context_form"):
@@ -293,7 +298,7 @@ def _vas(label: str, help_text: str, default: int) -> int:
 
 
 def render_scales() -> None:
-    assessment_header(6, TOTAL_STEPS, "Current experience")
+    assessment_header(7, TOTAL_STEPS, "Current experience")
     st.write("Move each marker to the point that best reflects how you feel right now.")
     answers = st.session_state.assessment_answers
     with st.form("scales_form"):
@@ -320,7 +325,7 @@ def render_scales() -> None:
 
 
 def render_event() -> None:
-    assessment_header(7, TOTAL_STEPS, "Since the previous assessment")
+    assessment_header(8, TOTAL_STEPS, "Since the previous assessment")
     answers = st.session_state.assessment_answers
     happened = st.radio(
         "Has anything stressful happened since your previous assessment?",
@@ -631,31 +636,24 @@ def render_estimation() -> None:
         # prompting conversion into seconds or another chronometric strategy.
         match_result = SUBJECTIVE_DURATION_COMPONENT(
             key="subjective_duration_match",
-            default={"position": 50},
+            default={"position": 10.0},
             height=110,
             on_position_change=lambda: None,
         )
-        slider_position = float(getattr(match_result, "position", 50))
+        slider_seconds = float(getattr(match_result, "position", 10.0))
         if st.button("Record response", type="primary", use_container_width=True):
             target = st.session_state.task_estimation_target
-            normalized_score = slider_position / 100.0
-            centered_score = normalized_score - 0.5
+            signed = slider_seconds - target
             st.session_state.task_estimation_result = {
                 "task_type": "subjective_passage_matching",
                 "target_seconds": target,
-                # Generic numeric fields remain populated for SQLite/export
-                # compatibility; their unit is normalized rather than seconds.
-                "response_seconds": normalized_score,
-                "signed_error": centered_score,
-                "absolute_error": abs(centered_score),
+                "response_seconds": slider_seconds,
+                "signed_error": signed,
+                "absolute_error": abs(signed),
             }
             _append_time_task(
                 st.session_state.task_estimation_result,
-                {
-                    "slider_position": slider_position,
-                    "normalized_subjective_duration_score": normalized_score,
-                    "response_measure": "normalized_subjective_duration",
-                },
+                {"response_measure": "slider_seconds_match"},
             )
             st.session_state.task_estimation_phase = "done"
             st.rerun()
@@ -778,7 +776,7 @@ def render_stroop() -> None:
 
 
 def render_review(participant_id: str) -> None:
-    assessment_header(8, TOTAL_STEPS, "Review and submit", "Under 1 min")
+    assessment_header(9, TOTAL_STEPS, "Review and submit", "Under 1 min")
     answers = st.session_state.assessment_answers
     st.success("All required task responses are complete.")
     left, middle, right = st.columns(3)
@@ -831,11 +829,12 @@ def render_assessment(participant_id: str) -> None:
         2: render_prospective,
         3: render_estimation,
         4: render_stroop,
-        5: render_context,
-        6: render_scales,
-        7: render_event,
+        5: render_counting_questions,
+        6: render_context,
+        7: render_scales,
+        8: render_event,
     }
-    if step == 8:
+    if step == 9:
         render_review(participant_id)
     else:
         renderers[step]()
