@@ -32,6 +32,8 @@ STROOP_COLORS = {
 }
 STROOP_KEY_MAP = {"ArrowLeft": "Blue", "ArrowRight": "Red"}
 STROOP_TRIAL_COUNT = 12
+STROOP_RESPONSE_WINDOW = 1.4
+STROOP_ITI = 0.3
 COUNTING_OPTIONS = ("Not at all", "Occasionally", "Frequently", "Continuously")
 TONE_SAMPLE_RATE = 16_000
 STANDARD_TONE_DURATION_SECONDS = 0.25
@@ -725,6 +727,24 @@ def render_stroop() -> None:
         if st.session_state.stroop_shown_at is None:
             st.session_state.stroop_shown_at = time.monotonic()
 
+        elapsed = time.monotonic() - st.session_state.stroop_shown_at
+        if elapsed >= STROOP_RESPONSE_WINDOW:
+            st.session_state.stroop_responses.append(
+                {
+                    **trial,
+                    "response": None,
+                    "response_key": None,
+                    "correct": False,
+                    "reaction_ms": None,
+                    "miss": True,
+                }
+            )
+            time.sleep(STROOP_ITI)
+            time.sleep(STROOP_ITI)
+            st.session_state.stroop_index += 1
+            st.session_state.stroop_shown_at = None
+            st.rerun()
+
         listener_key = f"stroop_trial_{index}"
         hotkeys.activate(
             [
@@ -766,7 +786,7 @@ def render_stroop() -> None:
         "accuracy": accuracy,
         "mean_reaction_ms": mean_reaction,
         "errors": errors,
-        "misses": 0,
+        "misses": sum(item.get("miss", False) for item in responses),
         "false_alarms": 0,
         "trials": responses,
     }
