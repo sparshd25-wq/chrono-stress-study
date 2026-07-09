@@ -139,12 +139,16 @@ SUBJECTIVE_DURATION_COMPONENT = components_v2.component(
     "subjective_duration_slider",
     html="""
         <div class="duration-match">
-            <div class="duration-labels">
-                <span>Passed Very Quickly</span>
-                <span>Passed Very Slowly</span>
+            <div class="instruction">
+                Move the slider until the pulse animation duration feels like the duration you just experienced.
             </div>
-            <input class="duration-slider" type="range" min="0" max="100" step="1"
-                   value="50" aria-label="How long the interval felt">
+            <div class="duration-labels">
+                <span>0 seconds</span>
+                <span>20 seconds</span>
+            </div>
+            <input class="duration-slider" type="range" min="0" max="20" step="0.1"
+                   value="10" aria-label="Matched duration">
+            <div id="duration-value">10.0 seconds</div>
         </div>
     """,
     css="""
@@ -540,11 +544,19 @@ def render_prospective() -> None:
         return
     if phase == "recording":
         # Hide playback controls so the audio stream cannot reveal elapsed time.
+        import base64
+        audio_b64 = base64.b64encode(
+            st.session_state.task_prospective_audio
+        ).decode()
+
         st.markdown(
-            "<style>div[data-testid='stAudio']{display:none}</style>",
+            f"""
+            <audio autoplay style="display:none">
+                <source src="data:audio/wav;base64,{audio_b64}" type="audio/wav">
+            </audio>
+            """,
             unsafe_allow_html=True,
         )
-        st.audio(st.session_state.task_prospective_audio, format="audio/wav", autoplay=True)
         _timed_stage("<div><strong>Timing in progress</strong><br><small>Respond when you think 30 seconds have passed.</small></div>")
         if st.button("Finish", type="primary", use_container_width=True):
             response = time.monotonic() - st.session_state.task_prospective_started
