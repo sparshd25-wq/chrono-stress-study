@@ -141,44 +141,39 @@ SUBJECTIVE_DURATION_COMPONENT = components_v2.component(
     "subjective_duration_slider",
     html="""
         <div class="duration-match">
-            <div class="duration-labels">
-                <span>Passed Very Quickly</span>
-                <span>Passed Very Slowly</span>
+            <div style="display:flex;justify-content:space-between;font-weight:600;margin-bottom:10px;">
+                <span>0 seconds</span>
+                <span id="duration-value">10 seconds</span>
+                <span>20 seconds</span>
             </div>
-            <input class="duration-slider" type="range" min="0" max="100" step="1"
-                   value="50" aria-label="How long the interval felt">
+            <input class="duration-slider" type="range" min="0" max="20" step="0.5"
+                   value="10" aria-label="Duration estimate">
         </div>
     """,
     css="""
-        .duration-match { padding: 20px 8px 12px; }
-        .duration-labels {
-            color: #334e68;
-            display: flex;
-            font: 600 14px/1.35 Inter, Arial, sans-serif;
-            justify-content: space-between;
-            margin-bottom: 18px;
-        }
-        .duration-labels span:last-child { text-align: right; }
+        .duration-match { padding:20px 8px 12px; }
         .duration-slider {
-            accent-color: #1976d2;
-            cursor: pointer;
-            height: 40px;
-            margin: 0;
-            touch-action: pan-x;
-            width: 100%;
+            width:100%;
+            accent-color:#1976d2;
+            height:40px;
         }
     """,
     js="""
         export default function(component) {
             const { parentElement, setStateValue } = component;
             const slider = parentElement.querySelector('.duration-slider');
-            slider.addEventListener('change', () => {
+            const label = parentElement.querySelector('#duration-value');
+
+            const update = () => {
+                label.textContent = slider.value + ' seconds';
                 setStateValue('position', Number(slider.value));
-            });
+            };
+
+            slider.addEventListener('input', update);
+            update();
         }
     """,
 )
-
 
 def start_assessment() -> None:
     """Create a fresh in-session assessment record."""
@@ -680,7 +675,7 @@ def _make_stroop_trials() -> list[dict[str, str | bool]]:
 
 def render_stroop() -> None:
     assessment_header(4, TOTAL_STEPS, "Colour-word task", "About 1 min")
-    if not st.session_state.get("stroop_started", False):
+    if not st.session_state.get("stroop_started", False) and "stroop_trials" not in st.session_state:
         st.write(
             "Respond to the ink colour, not the written word. Keep one finger on each "
             "arrow key and respond as quickly and accurately as possible."
