@@ -25,15 +25,13 @@ from config import (
 from database.repository import save_assessment
 
 
-TOTAL_STEPS = 9
+TOTAL_STEPS = 8
 STROOP_COLORS = {
     "Red": "#d64545",
     "Blue": "#1976d2",
 }
 STROOP_KEY_MAP = {"ArrowLeft": "Blue", "ArrowRight": "Red"}
 STROOP_TRIAL_COUNT = 12
-STROOP_RESPONSE_WINDOW = 1.4
-STROOP_ITI = 0.3
 COUNTING_OPTIONS = ("Not at all", "Occasionally", "Frequently", "Continuously")
 TONE_SAMPLE_RATE = 16_000
 STANDARD_TONE_DURATION_SECONDS = 0.25
@@ -141,16 +139,12 @@ SUBJECTIVE_DURATION_COMPONENT = components_v2.component(
     "subjective_duration_slider",
     html="""
         <div class="duration-match">
-            <div class="instruction">
-                Move the slider until the pulse animation duration feels like the duration you just experienced.
-            </div>
             <div class="duration-labels">
-                <span>0 seconds</span>
-                <span>20 seconds</span>
+                <span>Passed Very Quickly</span>
+                <span>Passed Very Slowly</span>
             </div>
-            <input class="duration-slider" type="range" min="0" max="20" step="0.1"
-                   value="10" aria-label="Matched duration">
-            <div id="duration-value">10.0 seconds</div>
+            <input class="duration-slider" type="range" min="0" max="100" step="1"
+                   value="50" aria-label="How long the interval felt">
         </div>
     """,
     css="""
@@ -176,15 +170,9 @@ SUBJECTIVE_DURATION_COMPONENT = components_v2.component(
         export default function(component) {
             const { parentElement, setStateValue } = component;
             const slider = parentElement.querySelector('.duration-slider');
-            const valueDisplay = parentElement.querySelector('#duration-value');
-            const updateDisplay = () => {
-                valueDisplay.textContent = `${Number(slider.value).toFixed(1)} seconds`;
-            };
-            slider.addEventListener('input', updateDisplay);
             slider.addEventListener('change', () => {
                 setStateValue('position', Number(slider.value));
             });
-            updateDisplay();
         }
     """,
 )
@@ -195,6 +183,7 @@ def start_assessment() -> None:
     for key in list(st.session_state):
         if key.startswith("task_") or key.startswith("stroop_"):
             del st.session_state[key]
+    st.session_state.pop("stroop_started", None)
     st.session_state.assessment_active = True
     st.session_state.assessment_step = 1
     st.session_state.assessment_started_at = datetime.now(timezone.utc).isoformat()
@@ -241,13 +230,9 @@ def render_counting_questions() -> None:
             "Did you intentionally count during the visual pulse task?",
             COUNTING_OPTIONS,
         )
-        left, right = st.columns(2)
-        back = left.form_submit_button("Back", use_container_width=True)
-        submitted = right.form_submit_button(
+        submitted = st.form_submit_button(
             "Continue", type="primary", use_container_width=True
         )
-    if back:
-        previous_step()
     if submitted:
         _append_time_task(
             st.session_state.task_reproduction_result,
@@ -261,11 +246,16 @@ def render_counting_questions() -> None:
             st.session_state.task_estimation_result,
             {"intentional_counting": pulse_counting},
         )
-        next_step()
+        st.session_state.task_counting_complete = True
+        st.rerun()
 
 
 def render_context() -> None:
-    assessment_header(6, TOTAL_STEPS, "Current context")
+    if not st.session_state.get("task_counting_complete", False):
+        render_counting_questions()
+        return
+
+    assessment_header(5, TOTAL_STEPS, "Current context")
     st.write("Tell us about the setting around this assessment.")
     answers = st.session_state.assessment_answers
     with st.form("context_form"):
@@ -300,7 +290,7 @@ def _vas(label: str, help_text: str, default: int) -> int:
 
 
 def render_scales() -> None:
-    assessment_header(7, TOTAL_STEPS, "Current experience")
+    assessment_header(6, TOTAL_STEPS, "Current experience")
     st.write("Move each marker to the point that best reflects how you feel right now.")
     answers = st.session_state.assessment_answers
     with st.form("scales_form"):
@@ -327,7 +317,7 @@ def render_scales() -> None:
 
 
 def render_event() -> None:
-    assessment_header(8, TOTAL_STEPS, "Since the previous assessment")
+    assessment_header(7, TOTAL_STEPS, "Since the previous assessment")
     answers = st.session_state.assessment_answers
     happened = st.radio(
         "Has anything stressful happened since your previous assessment?",
@@ -527,6 +517,7 @@ def render_reproduction() -> None:
 
     _timed_stage("<div><strong>Response recorded</strong><br><small>Your result remains blinded until submission.</small></div>")
     if st.button("Continue", type="primary", use_container_width=True):
+        st.session_state.stroop_started = False
         next_step()
 
 
@@ -551,19 +542,11 @@ def render_prospective() -> None:
         return
     if phase == "recording":
         # Hide playback controls so the audio stream cannot reveal elapsed time.
-        import base64
-        audio_b64 = base64.b64encode(
-            st.session_state.task_prospective_audio
-        ).decode()
-
         st.markdown(
-            f"""
-            <audio autoplay style="display:none">
-                <source src="data:audio/wav;base64,{audio_b64}" type="audio/wav">
-            </audio>
-            """,
+            "<style>div[data-testid='stAudio']{display:none}</style>",
             unsafe_allow_html=True,
         )
+        st.audio(st.session_state.task_prospective_audio, format="audio/wav", autoplay=True)
         _timed_stage("<div><strong>Timing in progress</strong><br><small>Respond when you think 30 seconds have passed.</small></div>")
         if st.button("Finish", type="primary", use_container_width=True):
             response = time.monotonic() - st.session_state.task_prospective_started
@@ -638,24 +621,31 @@ def render_estimation() -> None:
         # prompting conversion into seconds or another chronometric strategy.
         match_result = SUBJECTIVE_DURATION_COMPONENT(
             key="subjective_duration_match",
-            default={"position": 10.0},
+            default={"position": 50},
             height=110,
             on_position_change=lambda: None,
         )
-        slider_seconds = float(getattr(match_result, "position", 10.0))
+        slider_position = float(getattr(match_result, "position", 50))
         if st.button("Record response", type="primary", use_container_width=True):
             target = st.session_state.task_estimation_target
-            signed = slider_seconds - target
+            normalized_score = slider_position / 100.0
+            centered_score = normalized_score - 0.5
             st.session_state.task_estimation_result = {
                 "task_type": "subjective_passage_matching",
                 "target_seconds": target,
-                "response_seconds": slider_seconds,
-                "signed_error": signed,
-                "absolute_error": abs(signed),
+                # Generic numeric fields remain populated for SQLite/export
+                # compatibility; their unit is normalized rather than seconds.
+                "response_seconds": normalized_score,
+                "signed_error": centered_score,
+                "absolute_error": abs(centered_score),
             }
             _append_time_task(
                 st.session_state.task_estimation_result,
-                {"response_measure": "slider_seconds_match"},
+                {
+                    "slider_position": slider_position,
+                    "normalized_subjective_duration_score": normalized_score,
+                    "response_measure": "normalized_subjective_duration",
+                },
             )
             st.session_state.task_estimation_phase = "done"
             st.rerun()
@@ -680,7 +670,7 @@ def _make_stroop_trials() -> list[dict[str, str | bool]]:
 
 def render_stroop() -> None:
     assessment_header(4, TOTAL_STEPS, "Colour-word task", "About 1 min")
-    if "stroop_trials" not in st.session_state or st.session_state.get("stroop_index") is None:
+    if not st.session_state.get("stroop_started", False):
         st.write(
             "Respond to the ink colour, not the written word. Keep one finger on each "
             "arrow key and respond as quickly and accurately as possible."
@@ -707,6 +697,7 @@ def render_stroop() -> None:
             type="primary",
             use_container_width=True,
         ):
+            st.session_state.stroop_started = True
             st.session_state.stroop_trials = _make_stroop_trials()
             st.session_state.stroop_index = 0
             st.session_state.stroop_responses = []
@@ -726,29 +717,6 @@ def render_stroop() -> None:
         )
         if st.session_state.stroop_shown_at is None:
             st.session_state.stroop_shown_at = time.monotonic()
-
-        # native polling loop for automatic Stroop timeout handling
-        if (time.monotonic() - st.session_state.stroop_shown_at) < STROOP_RESPONSE_WINDOW:
-            time.sleep(0.1)
-            st.rerun()
-
-        elapsed = time.monotonic() - st.session_state.stroop_shown_at
-        if elapsed >= STROOP_RESPONSE_WINDOW:
-            st.session_state.stroop_responses.append(
-                {
-                    **trial,
-                    "response": None,
-                    "response_key": None,
-                    "correct": False,
-                    "reaction_ms": None,
-                    "miss": True,
-                }
-            )
-            time.sleep(STROOP_ITI)
-            time.sleep(STROOP_ITI)
-            st.session_state.stroop_index += 1
-            st.session_state.stroop_shown_at = None
-            st.rerun()
 
         listener_key = f"stroop_trial_{index}"
         hotkeys.activate(
@@ -791,7 +759,7 @@ def render_stroop() -> None:
         "accuracy": accuracy,
         "mean_reaction_ms": mean_reaction,
         "errors": errors,
-        "misses": sum(item.get("miss", False) for item in responses),
+        "misses": 0,
         "false_alarms": 0,
         "trials": responses,
     }
@@ -801,7 +769,7 @@ def render_stroop() -> None:
 
 
 def render_review(participant_id: str) -> None:
-    assessment_header(9, TOTAL_STEPS, "Review and submit", "Under 1 min")
+    assessment_header(8, TOTAL_STEPS, "Review and submit", "Under 1 min")
     answers = st.session_state.assessment_answers
     st.success("All required task responses are complete.")
     left, middle, right = st.columns(3)
@@ -854,12 +822,11 @@ def render_assessment(participant_id: str) -> None:
         2: render_prospective,
         3: render_estimation,
         4: render_stroop,
-        5: render_counting_questions,
-        6: render_context,
-        7: render_scales,
-        8: render_event,
+        5: render_context,
+        6: render_scales,
+        7: render_event,
     }
-    if step == 9:
+    if step == 8:
         render_review(participant_id)
     else:
         renderers[step]()
