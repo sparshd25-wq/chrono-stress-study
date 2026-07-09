@@ -32,6 +32,8 @@ STROOP_COLORS = {
 }
 STROOP_KEY_MAP = {"ArrowLeft": "Blue", "ArrowRight": "Red"}
 STROOP_TRIAL_COUNT = 12
+STROOP_RESPONSE_WINDOW = 1.4
+STROOP_ITI = 0.3
 COUNTING_OPTIONS = ("Not at all", "Occasionally", "Frequently", "Continuously")
 TONE_SAMPLE_RATE = 16_000
 STANDARD_TONE_DURATION_SECONDS = 0.25
@@ -541,12 +543,20 @@ def render_prospective() -> None:
         navigation_back()
         return
     if phase == "recording":
-        # Hide playback controls so the audio stream cannot reveal elapsed time.
+        # Hidden autoplay audio so participants cannot use the progress bar as a timer.
+        import base64
+        audio_b64 = base64.b64encode(
+            st.session_state.task_prospective_audio
+        ).decode()
+
         st.markdown(
-            "<style>div[data-testid='stAudio']{display:none}</style>",
+            f'''
+            <audio autoplay style="display:none">
+                <source src="data:audio/wav;base64,{audio_b64}" type="audio/wav">
+            </audio>
+            ''',
             unsafe_allow_html=True,
         )
-        st.audio(st.session_state.task_prospective_audio, format="audio/wav", autoplay=True)
         _timed_stage("<div><strong>Timing in progress</strong><br><small>Respond when you think 30 seconds have passed.</small></div>")
         if st.button("Finish", type="primary", use_container_width=True):
             response = time.monotonic() - st.session_state.task_prospective_started
@@ -717,6 +727,29 @@ def render_stroop() -> None:
         )
         if st.session_state.stroop_shown_at is None:
             st.session_state.stroop_shown_at = time.monotonic()
+
+        elapsed = time.monotonic() - st.session_state.stroop_shown_at
+
+        # automatic timeout after 1.4 seconds
+        if elapsed >= STROOP_RESPONSE_WINDOW:
+            st.session_state.stroop_responses.append(
+                {
+                    **trial,
+                    "response": None,
+                    "response_key": None,
+                    "correct": False,
+                    "reaction_ms": None,
+                    "miss": True,
+                }
+            )
+            time.sleep(STROOP_ITI)
+            st.session_state.stroop_index += 1
+            st.session_state.stroop_shown_at = None
+            st.rerun()
+
+        # force periodic reruns while waiting for a response
+        time.sleep(0.1)
+        st.rerun()
 
         listener_key = f"stroop_trial_{index}"
         hotkeys.activate(
