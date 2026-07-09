@@ -12,6 +12,7 @@ import wave
 import numpy as np
 import streamlit as st
 import streamlit_hotkeys as hotkeys
+from streamlit_autorefresh import st_autorefresh
 from streamlit.components import v2 as components_v2
 
 from components.ui import assessment_header
@@ -726,6 +727,11 @@ def render_stroop() -> None:
         )
         if st.session_state.stroop_shown_at is None:
             st.session_state.stroop_shown_at = time.monotonic()
+
+        st_autorefresh(
+            interval=200,
+            key=f"stroop_refresh_{index}",
+        )
 
         elapsed = time.monotonic() - st.session_state.stroop_shown_at
         if elapsed >= STROOP_RESPONSE_WINDOW:
