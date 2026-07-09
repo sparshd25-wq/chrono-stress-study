@@ -619,38 +619,30 @@ def render_estimation() -> None:
         time.sleep(.08)
         st.rerun()
     if phase == "respond":
-        _timed_stage(
-            "<div><strong>Move the slider to indicate how long the interval felt.</strong></div>"
-        )
+        st.markdown("**How long did the interval feel?**")
+        st.caption("Move the slider to match the duration you just experienced.")
         # A non-numeric continuum captures experienced passage of time without
         # prompting conversion into seconds or another chronometric strategy.
         match_result = SUBJECTIVE_DURATION_COMPONENT(
             key="subjective_duration_match",
-            default={"position": 50},
+            default={"position": 10.0},
             height=110,
             on_position_change=lambda: None,
         )
-        slider_position = float(getattr(match_result, "position", 50))
+        slider_seconds = float(getattr(match_result, "position", 10.0))
         if st.button("Record response", type="primary", use_container_width=True):
             target = st.session_state.task_estimation_target
-            normalized_score = slider_position / 100.0
-            centered_score = normalized_score - 0.5
+            signed = slider_seconds - target
             st.session_state.task_estimation_result = {
                 "task_type": "subjective_passage_matching",
                 "target_seconds": target,
-                # Generic numeric fields remain populated for SQLite/export
-                # compatibility; their unit is normalized rather than seconds.
-                "response_seconds": normalized_score,
-                "signed_error": centered_score,
-                "absolute_error": abs(centered_score),
+                "response_seconds": slider_seconds,
+                "signed_error": signed,
+                "absolute_error": abs(signed),
             }
             _append_time_task(
                 st.session_state.task_estimation_result,
-                {
-                    "slider_position": slider_position,
-                    "normalized_subjective_duration_score": normalized_score,
-                    "response_measure": "normalized_subjective_duration",
-                },
+                {"response_measure": "slider_seconds_match"},
             )
             st.session_state.task_estimation_phase = "done"
             st.rerun()
@@ -675,77 +667,68 @@ def _make_stroop_trials() -> list[dict[str, str | bool]]:
 
 def render_stroop() -> None:
     assessment_header(4, TOTAL_STEPS, "Colour-word task", "About 1 min")
+    # A single placeholder for the swapping region below. Writing into the same
+    # st.empty() slot every rerun forces Streamlit to fully replace its prior
+    # content, which is what stops the intro screen's buttons from lingering
+    # under rapid polling reruns once trials have started.
+    stage = st.empty()
+
     if not st.session_state.get("stroop_started", False) and "stroop_trials" not in st.session_state:
-        st.write(
-            "Respond to the ink colour, not the written word. Keep one finger on each "
-            "arrow key and respond as quickly and accurately as possible."
-        )
-        st.markdown(
-            """
-            <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin:16px 0">
-                <div class="research-card" style="text-align:center;margin:0">
-                    <strong>Left Arrow</strong><br><span style="color:#1976d2">BLUE ink</span>
+        with stage.container():
+            st.write(
+                "Respond to the ink colour, not the written word. Keep one finger on each "
+                "arrow key and respond as quickly and accurately as possible."
+            )
+            st.markdown(
+                """
+                <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin:16px 0">
+                    <div class="research-card" style="text-align:center;margin:0">
+                        <strong>Left Arrow</strong><br><span style="color:#1976d2">BLUE ink</span>
+                    </div>
+                    <div class="research-card" style="text-align:center;margin:0">
+                        <strong>Right Arrow</strong><br><span style="color:#d64545">RED ink</span>
+                    </div>
                 </div>
-                <div class="research-card" style="text-align:center;margin:0">
-                    <strong>Right Arrow</strong><br><span style="color:#d64545">RED ink</span>
-                </div>
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
-        _timed_stage(
-            '<div><span class="stroop-word" style="color:#1976d2">RED</span>'
-            '<br><small>Correct response: Left Arrow, because the ink is blue.</small></div>'
-        )
-        if st.button(
-            f"Begin {STROOP_TRIAL_COUNT} trials",
-            type="primary",
-            use_container_width=True,
-        ):
-            st.session_state.stroop_started = True
-            st.session_state.stroop_trials = _make_stroop_trials()
-            st.session_state.stroop_index = 0
-            st.session_state.stroop_responses = []
-            st.session_state.stroop_shown_at = None
-            st.rerun()
-        navigation_back()
+                """,
+                unsafe_allow_html=True,
+            )
+            _timed_stage(
+                '<div><span class="stroop-word" style="color:#1976d2">RED</span>'
+                '<br><small>Correct response: Left Arrow, because the ink is blue.</small></div>'
+            )
+            if st.button(
+                f"Begin {STROOP_TRIAL_COUNT} trials",
+                type="primary",
+                use_container_width=True,
+            ):
+                st.session_state.stroop_started = True
+                st.session_state.stroop_trials = _make_stroop_trials()
+                st.session_state.stroop_index = 0
+                st.session_state.stroop_responses = []
+                st.session_state.stroop_shown_at = None
+                st.rerun()
+            navigation_back()
         return
 
     index = st.session_state.stroop_index
     trials = st.session_state.stroop_trials
     if index < len(trials):
         trial = trials[index]
-        st.progress(index / len(trials))
-        st.caption("Left Arrow = BLUE  |  Right Arrow = RED")
-        _timed_stage(
-            f'<div class="stroop-word" style="color:{STROOP_COLORS[trial["ink"]]}">{trial["word"].upper()}</div>'
-        )
+        with stage.container():
+            st.progress(index / len(trials))
+            st.caption("Left Arrow = BLUE  |  Right Arrow = RED")
+            _timed_stage(
+                f'<div class="stroop-word" style="color:{STROOP_COLORS[trial["ink"]]}">{trial["word"].upper()}</div>'
+            )
         if st.session_state.stroop_shown_at is None:
             st.session_state.stroop_shown_at = time.monotonic()
 
-        elapsed = time.monotonic() - st.session_state.stroop_shown_at
-
-        # automatic timeout after 1.4 seconds
-        if elapsed >= STROOP_RESPONSE_WINDOW:
-            st.session_state.stroop_responses.append(
-                {
-                    **trial,
-                    "response": None,
-                    "response_key": None,
-                    "correct": False,
-                    "reaction_ms": None,
-                    "miss": True,
-                }
-            )
-            time.sleep(STROOP_ITI)
-            st.session_state.stroop_index += 1
-            st.session_state.stroop_shown_at = None
-            st.rerun()
-
-        # force periodic reruns while waiting for a response
-        time.sleep(0.1)
-        st.rerun()
-
+        # Check for a real keypress FIRST. Previously the timeout branch fell
+        # straight into an unconditional "time.sleep(0.1); st.rerun()", and
+        # st.rerun() halts the script immediately — so the hotkey listener
+        # below it never actually ran on any trial. Every trial silently
+        # timed out and was logged as a miss regardless of what the
+        # participant pressed, which is why accuracy was always wrong.
         listener_key = f"stroop_trial_{index}"
         hotkeys.activate(
             [
@@ -770,30 +753,58 @@ def render_stroop() -> None:
                     "response_key": pressed_key,
                     "correct": selected_colour == trial["ink"],
                     "reaction_ms": round(reaction_ms, 2),
+                    "miss": False,
                 }
             )
             st.session_state.stroop_index += 1
             st.session_state.stroop_shown_at = None
             st.rerun()
+            return
+
+        elapsed = time.monotonic() - st.session_state.stroop_shown_at
+
+        # automatic timeout after 1.4 seconds
+        if elapsed >= STROOP_RESPONSE_WINDOW:
+            st.session_state.stroop_responses.append(
+                {
+                    **trial,
+                    "response": None,
+                    "response_key": None,
+                    "correct": False,
+                    "reaction_ms": None,
+                    "miss": True,
+                }
+            )
+            time.sleep(STROOP_ITI)
+            st.session_state.stroop_index += 1
+            st.session_state.stroop_shown_at = None
+            st.rerun()
+            return
+
+        # force periodic reruns while waiting for a response
+        time.sleep(0.1)
+        st.rerun()
         return
 
-    responses = st.session_state.stroop_responses
-    accuracy = float(np.mean([item["correct"] for item in responses]) * 100)
-    reaction_times = [item["reaction_ms"] for item in responses if item["correct"]]
-    mean_reaction = float(np.mean(reaction_times)) if reaction_times else 0.0
-    errors = sum(not item["correct"] for item in responses)
-    st.session_state.cognitive_result = {
-        "task_type": "stroop",
-        "accuracy": accuracy,
-        "mean_reaction_ms": mean_reaction,
-        "errors": errors,
-        "misses": 0,
-        "false_alarms": 0,
-        "trials": responses,
-    }
-    _timed_stage(f"<div><strong>Task complete</strong><br><small>{accuracy:.0f}% accuracy</small></div>")
-    if st.button("Continue", type="primary", use_container_width=True):
-        next_step()
+    with stage.container():
+        responses = st.session_state.stroop_responses
+        accuracy = float(np.mean([item["correct"] for item in responses]) * 100)
+        reaction_times = [item["reaction_ms"] for item in responses if item["correct"]]
+        mean_reaction = float(np.mean(reaction_times)) if reaction_times else 0.0
+        misses = sum(1 for item in responses if item.get("miss"))
+        errors = sum(1 for item in responses if not item["correct"] and not item.get("miss"))
+        st.session_state.cognitive_result = {
+            "task_type": "stroop",
+            "accuracy": accuracy,
+            "mean_reaction_ms": mean_reaction,
+            "errors": errors,
+            "misses": misses,
+            "false_alarms": 0,
+            "trials": responses,
+        }
+        _timed_stage(f"<div><strong>Task complete</strong><br><small>{accuracy:.0f}% accuracy</small></div>")
+        if st.button("Continue", type="primary", use_container_width=True):
+            next_step()
 
 
 def render_review(participant_id: str) -> None:
