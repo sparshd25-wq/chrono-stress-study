@@ -142,11 +142,11 @@ SUBJECTIVE_DURATION_COMPONENT = components_v2.component(
     html="""
         <div class="duration-match">
             <div class="duration-labels">
-                <span>Passed Very Quickly</span>
-                <span>Passed Very Slowly</span>
+                <span>0 seconds</span>
+                <span>20 seconds</span>
             </div>
-            <input class="duration-slider" type="range" min="0" max="100" step="1"
-                   value="50" aria-label="How long the interval felt">
+            <input class="duration-slider" type="range" min="0" max="20" step="1"
+                   value="10" aria-label="Matched duration">
         </div>
     """,
     css="""
@@ -631,11 +631,11 @@ def render_estimation() -> None:
         # prompting conversion into seconds or another chronometric strategy.
         match_result = SUBJECTIVE_DURATION_COMPONENT(
             key="subjective_duration_match",
-            default={"position": 50},
+            default={"position": 10},
             height=110,
             on_position_change=lambda: None,
         )
-        slider_position = float(getattr(match_result, "position", 50))
+        slider_position = float(getattr(match_result, "position", 10))
         if st.button("Record response", type="primary", use_container_width=True):
             target = st.session_state.task_estimation_target
             normalized_score = slider_position / 100.0
@@ -645,7 +645,7 @@ def render_estimation() -> None:
                 "target_seconds": target,
                 # Generic numeric fields remain populated for SQLite/export
                 # compatibility; their unit is normalized rather than seconds.
-                "response_seconds": normalized_score,
+                "response_seconds": slider_position,
                 "signed_error": centered_score,
                 "absolute_error": abs(centered_score),
             }
