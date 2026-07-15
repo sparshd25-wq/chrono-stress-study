@@ -590,10 +590,11 @@ def render_scales() -> None:
 
             .stress-anchor {
                 color: #587084;
-                font-size: .72rem;
+                font-size: .58rem;
                 font-weight: 750;
                 line-height: 1.15;
                 min-width: 0;
+                overflow-wrap: anywhere;
                 text-align: center;
             }
 
@@ -612,7 +613,7 @@ def render_scales() -> None:
 
             @media (min-width: 561px) {
                 .stress-anchor {
-                    font-size: .82rem;
+                    font-size: .72rem;
                 }
 
                 .stress-anchor span {
@@ -636,16 +637,6 @@ def render_scales() -> None:
 
     stress_score = int(st.session_state[slider_key])
     stress_label = STRESS_LABELS[stress_score]
-    abbreviations = {
-        1: "VL",
-        2: "L",
-        3: "SL",
-        4: "M",
-        5: "SH",
-        6: "H",
-        7: "VH",
-    }
-
     st.markdown(
         f"""
         <div class="stress-picker">
@@ -673,7 +664,7 @@ def render_scales() -> None:
         + "".join(
             (
                 f'<div class="stress-anchor {"active" if value == stress_score else ""}">'
-                f"<span>{value}</span>{abbreviations[value]}</div>"
+                f"<span>{value}</span>{STRESS_LABELS[value]}</div>"
             )
             for value in range(1, 8)
         )
