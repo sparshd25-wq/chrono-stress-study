@@ -539,10 +539,38 @@ def render_scales() -> None:
     assessment_header(6, TOTAL_STEPS, "Current stress")
     answers = st.session_state.assessment_answers
     saved_stress = int(answers.get("stress_score", answers.get("stress", 4)))
+    slider_key = "stress_score_slider"
+    st.session_state.setdefault(
+        slider_key,
+        saved_stress if saved_stress in STRESS_LABELS else 4,
+    )
 
     st.markdown(
         """
         <style>
+            .stress-picker {
+                margin: .35rem 0 1rem;
+            }
+
+            .stress-selected {
+                color: #1769aa;
+                font-weight: 850;
+                line-height: 1.05;
+                margin: .35rem 0 .2rem;
+                text-align: center;
+                text-transform: uppercase;
+            }
+
+            .stress-selected-label {
+                font-size: clamp(1.35rem, 6vw, 2rem);
+                letter-spacing: .04em;
+            }
+
+            .stress-selected-number {
+                font-size: clamp(1.2rem, 5vw, 1.7rem);
+                margin-top: .25rem;
+            }
+
             div[data-testid="stSlider"] {
                 padding-top: 0.25rem;
             }
@@ -552,53 +580,53 @@ def render_scales() -> None:
                 min-width: 48px;
             }
 
-            .stress-current {
-                background: #eaf2f8;
-                border: 1px solid #cfe0ef;
-                border-radius: 8px;
-                color: #152238;
-                font-weight: 700;
-                margin: 0.25rem 0 0.75rem;
-                padding: 0.85rem 1rem;
-                text-align: center;
-            }
-
             .stress-anchors {
                 display: grid;
-                gap: 6px;
+                gap: 4px;
                 grid-template-columns: repeat(7, minmax(0, 1fr));
-                margin: 0.4rem 0 1.2rem;
+                margin: .15rem 0 1.2rem;
                 width: 100%;
             }
 
             .stress-anchor {
                 color: #587084;
-                font-size: 0.78rem;
-                font-weight: 700;
-                line-height: 1.2;
-                min-height: 48px;
+                font-size: .72rem;
+                font-weight: 750;
+                line-height: 1.15;
+                min-width: 0;
                 text-align: center;
             }
 
             .stress-anchor span {
                 color: #152238;
                 display: block;
-                font-size: 0.92rem;
-                margin-top: 5px;
+                font-size: .9rem;
+                font-weight: 800;
+                margin-bottom: 3px;
             }
 
-            @media (max-width: 560px) {
-                .stress-anchors {
-                    gap: 4px;
-                }
+            .stress-anchor.active,
+            .stress-anchor.active span {
+                color: #1769aa;
+            }
 
+            @media (min-width: 561px) {
                 .stress-anchor {
-                    font-size: 0.62rem;
-                    overflow-wrap: anywhere;
+                    font-size: .82rem;
                 }
 
                 .stress-anchor span {
-                    font-size: 0.82rem;
+                    font-size: .98rem;
+                }
+            }
+
+            @media (max-width: 560px) {
+                .stress-picker {
+                    margin-top: .15rem;
+                }
+
+                .stress-anchors {
+                    gap: 2px;
                 }
             }
         </style>
@@ -606,40 +634,57 @@ def render_scales() -> None:
         unsafe_allow_html=True,
     )
 
-    with st.form("scales_form"):
-        current_selection = st.empty()
-        stress_score = st.slider(
-            "How stressed do you feel right now?",
-            min_value=1,
-            max_value=7,
-            value=saved_stress if saved_stress in STRESS_LABELS else 4,
-            step=1,
-        )
-        stress_label = STRESS_LABELS[stress_score]
-        current_selection.markdown(
-            f'<div class="stress-current">Current selection: {stress_label}</div>',
-            unsafe_allow_html=True,
-        )
-        st.markdown(
-            """
-            <div class="stress-anchors">
-                <div class="stress-anchor">Very Low<span>1</span></div>
-                <div class="stress-anchor">Low<span>2</span></div>
-                <div class="stress-anchor">Slightly Low<span>3</span></div>
-                <div class="stress-anchor">Moderate<span>4</span></div>
-                <div class="stress-anchor">Slightly High<span>5</span></div>
-                <div class="stress-anchor">High<span>6</span></div>
-                <div class="stress-anchor">Very High<span>7</span></div>
+    stress_score = int(st.session_state[slider_key])
+    stress_label = STRESS_LABELS[stress_score]
+    abbreviations = {
+        1: "VL",
+        2: "L",
+        3: "SL",
+        4: "M",
+        5: "SH",
+        6: "H",
+        7: "VH",
+    }
+
+    st.markdown(
+        f"""
+        <div class="stress-picker">
+            <div class="stress-selected">
+                <div class="stress-selected-label">{stress_label}</div>
+                <div class="stress-selected-number">{stress_score}</div>
             </div>
-            """,
-            unsafe_allow_html=True,
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    stress_score = st.slider(
+        "How stressed do you feel right now?",
+        min_value=1,
+        max_value=7,
+        value=stress_score,
+        step=1,
+        key=slider_key,
+    )
+    stress_label = STRESS_LABELS[stress_score]
+
+    st.markdown(
+        '<div class="stress-anchors">'
+        + "".join(
+            (
+                f'<div class="stress-anchor {"active" if value == stress_score else ""}">'
+                f"<span>{value}</span>{abbreviations[value]}</div>"
+            )
+            for value in range(1, 8)
         )
-        left, right = st.columns(2)
-        back = left.form_submit_button("Back", use_container_width=True)
-        submitted = right.form_submit_button("Continue", type="primary", use_container_width=True)
-    if back:
+        + "</div>",
+        unsafe_allow_html=True,
+    )
+
+    left, right = st.columns(2)
+    if left.button("Back", use_container_width=True):
         previous_step()
-    if submitted:
+    if right.button("Continue", type="primary", use_container_width=True):
         answers["stress"] = stress_score
         answers["stress_score"] = stress_score
         answers["stress_label"] = stress_label
