@@ -138,64 +138,194 @@ HOLD_REPRODUCTION_COMPONENT = components_v2.component(
 
 
 PULSE_RATE_MATCH_COMPONENT = components_v2.component(
-    "pulse_rate_match_slider",
+    "pulse_rate_hold_dial",
     html="""
-        <div class="pulse-match">
-            <div style="display:flex;justify-content:space-between;font-weight:600;margin-bottom:10px;">
-                <span>Slow pulse</span>
-                <span id="pulse-rate-value">1.20 pulses/sec</span>
-                <span>Fast pulse</span>
+        <div class="pulse-hold-match">
+            <div class="preview-wrap" aria-hidden="true">
+                <div class="preview-pulse"></div>
             </div>
-            <input class="pulse-rate-slider" type="range" min="0.5" max="2.5" step="0.05"
-                   value="1.2" aria-label="Pulse rhythm match">
-            <div class="pulse-preview-wrap">
-                <div class="pulse-preview"></div>
+
+            <div class="dial-row">
+                <span>SLOWER</span>
+                <button type="button" class="hold-dial" aria-label="Hold to match pulse rhythm">
+                    <span class="dial-core"></span>
+                </button>
+                <span>FASTER</span>
             </div>
         </div>
     """,
     css="""
-        .pulse-match { padding:20px 8px 12px; }
-        .pulse-rate-slider {
-            width:100%;
-            accent-color:#1976d2;
-            height:40px;
+        :host {
+            display:block;
         }
-        .pulse-preview-wrap {
+        .pulse-hold-match {
+            align-items:center;
+            color:#152238;
+            display:flex;
+            flex-direction:column;
+            gap:24px;
+            justify-content:center;
+            padding:18px 8px 28px;
+        }
+        .preview-wrap {
             align-items:center;
             display:flex;
-            height:180px;
+            height:170px;
             justify-content:center;
-            margin-top:18px;
+            width:100%;
         }
-        .pulse-preview {
-            animation: pulse-preview var(--pulse-duration, .83s) ease-in-out infinite;
+        .preview-pulse {
+            animation: preview-pulse var(--pulse-duration, 1.35s) ease-in-out infinite;
             background:#1976d2;
             border-radius:50%;
-            height:112px;
-            opacity:.82;
-            width:112px;
+            box-shadow:0 0 0 12px rgba(25,118,210,.08),
+                       0 16px 32px rgba(25,118,210,.18);
+            height:118px;
+            opacity:.76;
+            transform:scale(.72);
+            width:118px;
         }
-        @keyframes pulse-preview {
-            0%, 100% { transform:scale(.72); opacity:.65; }
+        .dial-row {
+            align-items:center;
+            display:grid;
+            gap:18px;
+            grid-template-columns:minmax(76px, 1fr) auto minmax(76px, 1fr);
+            max-width:520px;
+            width:100%;
+        }
+        .dial-row span {
+            color:#587084;
+            font:700 13px/1 Inter, Arial, sans-serif;
+            letter-spacing:.12em;
+            text-align:center;
+        }
+        .hold-dial {
+            --fill:0deg;
+            align-items:center;
+            background:conic-gradient(#1976d2 var(--fill), #d8e5ef 0deg);
+            border:0;
+            border-radius:50%;
+            box-shadow:0 12px 30px rgba(21,34,56,.16);
+            cursor:pointer;
+            display:flex;
+            height:148px;
+            justify-content:center;
+            padding:12px;
+            touch-action:none;
+            user-select:none;
+            width:148px;
+            -webkit-tap-highlight-color:transparent;
+        }
+        .hold-dial:focus-visible {
+            outline:3px solid rgba(25,118,210,.35);
+            outline-offset:4px;
+        }
+        .hold-dial.holding {
+            box-shadow:0 0 0 10px rgba(25,118,210,.08),
+                       0 18px 36px rgba(21,34,56,.20);
+        }
+        .dial-core {
+            background:#ffffff;
+            border-radius:50%;
+            box-shadow:inset 0 0 0 1px rgba(88,112,132,.16);
+            display:block;
+            height:100%;
+            width:100%;
+        }
+        @keyframes preview-pulse {
+            0%, 100% { transform:scale(.72); opacity:.66; }
             50% { transform:scale(1); opacity:1; }
+        }
+        @media (max-width: 560px) {
+            .dial-row {
+                gap:10px;
+                grid-template-columns:minmax(58px, 1fr) auto minmax(58px, 1fr);
+            }
+            .dial-row span {
+                font-size:11px;
+                letter-spacing:.08em;
+            }
+            .hold-dial {
+                height:126px;
+                width:126px;
+            }
         }
     """,
     js="""
         export default function(component) {
-            const { parentElement, setStateValue } = component;
-            const slider = parentElement.querySelector('.pulse-rate-slider');
-            const label = parentElement.querySelector('#pulse-rate-value');
-            const preview = parentElement.querySelector('.pulse-preview');
+            const { parentElement, setTriggerValue } = component;
+            const dial = parentElement.querySelector('.hold-dial');
+            const preview = parentElement.querySelector('.preview-pulse');
+            const minRate = 0.5;
+            const maxRate = 2.5;
+            const maxHoldMs = 4200;
+            let startedAt = null;
+            let animationFrame = null;
+            let currentRate = minRate;
 
-            const update = () => {
-                const rate = Number(slider.value);
-                label.textContent = rate.toFixed(2) + ' pulses/sec';
-                preview.style.setProperty('--pulse-duration', (1 / rate).toFixed(3) + 's');
-                setStateValue('rate', rate);
+            const rateFromProgress = (progress) => {
+                const eased = 1 - Math.pow(1 - progress, 2);
+                return minRate + (maxRate - minRate) * eased;
             };
 
-            slider.addEventListener('input', update);
-            update();
+            const render = () => {
+                const elapsed = performance.now() - startedAt;
+                const progress = Math.min(1, elapsed / maxHoldMs);
+                currentRate = rateFromProgress(progress);
+                dial.style.setProperty('--fill', `${progress * 360}deg`);
+                preview.style.setProperty('--pulse-duration', `${(1 / currentRate).toFixed(3)}s`);
+                animationFrame = requestAnimationFrame(render);
+            };
+
+            const begin = (event) => {
+                event.preventDefault();
+                if (startedAt !== null) return;
+                startedAt = performance.now();
+                dial.classList.add('holding');
+                if (event.pointerId !== undefined) {
+                    dial.setPointerCapture(event.pointerId);
+                }
+                render();
+            };
+
+            const finish = (event) => {
+                event.preventDefault();
+                if (startedAt === null) return;
+                cancelAnimationFrame(animationFrame);
+                animationFrame = null;
+                startedAt = null;
+                dial.classList.remove('holding');
+                setTriggerValue('matched_rate', Number(currentRate.toFixed(4)));
+            };
+
+            const cancel = () => {
+                if (animationFrame !== null) {
+                    cancelAnimationFrame(animationFrame);
+                }
+                animationFrame = null;
+                startedAt = null;
+                dial.classList.remove('holding');
+            };
+
+            preview.style.setProperty('--pulse-duration', `${(1 / minRate).toFixed(3)}s`);
+            dial.addEventListener('pointerdown', begin);
+            dial.addEventListener('pointerup', finish);
+            dial.addEventListener('pointercancel', cancel);
+            dial.addEventListener('pointerleave', (event) => {
+                if (startedAt !== null && event.buttons === 0) cancel();
+            });
+            dial.addEventListener('contextmenu', (event) => event.preventDefault());
+            dial.addEventListener('keydown', (event) => {
+                if ((event.key === ' ' || event.key === 'Enter') && !event.repeat) begin(event);
+            });
+            dial.addEventListener('keyup', (event) => {
+                if (event.key === ' ' || event.key === 'Enter') finish(event);
+            });
+
+            return () => {
+                cancel();
+                dial.replaceWith(dial.cloneNode(true));
+            };
         }
     """,
 )
@@ -565,26 +695,27 @@ def render_estimation() -> None:
         time.sleep(.08)
         st.rerun()
     if phase == "respond":
-        st.markdown("**Recreate the pulse rhythm you just observed.**")
+        st.markdown("### Pulse rhythm matching")
         st.write(
-            "Move the slider until the pulse speed below matches the speed of the "
-            "pulse you just experienced."
+            "Recreate the pulse rhythm you just observed.\n\n"
+            "Press and hold the circular control until the pulse below feels like "
+            "the same rhythm you experienced previously.\n\n"
+            "Release when it feels like a match."
         )
-        st.caption("This pulse feels like the same rhythm I saw earlier.")
         match_result = PULSE_RATE_MATCH_COMPONENT(
             key="pulse_rate_match",
-            default={"rate": 1.2},
-            height=300,
-            on_rate_change=lambda: None,
+            height=360,
+            on_matched_rate_change=lambda: None,
         )
-        matched_rate = float(getattr(match_result, "rate", 1.2))
-        if st.button("Record response", type="primary", use_container_width=True):
+        matched_rate = getattr(match_result, "matched_rate", None)
+        if matched_rate is not None:
             target_rate = st.session_state.task_estimation_target_pulse_rate
+            participant_rate = float(matched_rate)
             st.session_state.task_estimation_result = {
                 "task_type": "pulse_matching",
                 "target_pulse_rate": target_rate,
-                "matched_pulse_rate": matched_rate,
-                "matching_error": matched_rate - target_rate,
+                "matched_pulse_rate": participant_rate,
+                "matching_error": participant_rate - target_rate,
             }
             _append_time_task(st.session_state.task_estimation_result, {})
             st.session_state.task_estimation_phase = "done"
