@@ -31,15 +31,15 @@ STROOP_TRIAL_COUNT = 12
 STROOP_RESPONSE_WINDOW = 1.4
 STROOP_ITI = 0.3
 COUNTING_OPTIONS = ("Not at all", "Occasionally", "Frequently", "Continuously")
-STRESS_OPTIONS = (
-    (1, "Very Low"),
-    (2, "Low"),
-    (3, "Slightly Low"),
-    (4, "Moderate"),
-    (5, "Slightly High"),
-    (6, "High"),
-    (7, "Very High"),
-)
+STRESS_LABELS = {
+    1: "Very Low",
+    2: "Low",
+    3: "Slightly Low",
+    4: "Moderate",
+    5: "Slightly High",
+    6: "High",
+    7: "Very High",
+}
 
 
 HOLD_REPRODUCTION_COMPONENT = components_v2.component(
@@ -330,6 +330,83 @@ PULSE_RATE_MATCH_COMPONENT = components_v2.component(
     """,
 )
 
+
+STROOP_TOUCH_RESPONSE_COMPONENT = components_v2.component(
+    "stroop_touch_response",
+    html="""
+        <div class="stroop-touch-buttons">
+            <button type="button" class="stroop-touch-button blue" data-key="ArrowLeft">
+                BLUE
+            </button>
+            <button type="button" class="stroop-touch-button red" data-key="ArrowRight">
+                RED
+            </button>
+        </div>
+    """,
+    css="""
+        :host {
+            display:block;
+        }
+        .stroop-touch-buttons {
+            display:none;
+        }
+        @media (max-width: 767px) {
+            .stroop-touch-buttons {
+                display:grid;
+                gap:10px;
+                grid-template-columns:1fr 1fr;
+                padding:0 2px 10px;
+                width:100%;
+            }
+            .stroop-touch-button {
+                border:0;
+                border-radius:8px;
+                color:#ffffff;
+                cursor:pointer;
+                font:800 18px/1 Inter, Arial, sans-serif;
+                min-height:64px;
+                touch-action:manipulation;
+                user-select:none;
+                width:100%;
+                -webkit-tap-highlight-color:transparent;
+            }
+            .stroop-touch-button.blue {
+                background:#1976d2;
+                box-shadow:0 8px 18px rgba(25,118,210,.22);
+            }
+            .stroop-touch-button.red {
+                background:#d64545;
+                box-shadow:0 8px 18px rgba(214,69,69,.22);
+            }
+            .stroop-touch-button:active {
+                filter:brightness(.92);
+                transform:translateY(1px);
+            }
+        }
+    """,
+    js="""
+        export default function(component) {
+            const { parentElement, setTriggerValue } = component;
+            const buttons = parentElement.querySelectorAll('.stroop-touch-button');
+
+            const respond = (event) => {
+                event.preventDefault();
+                setTriggerValue('response_key', event.currentTarget.dataset.key);
+            };
+
+            buttons.forEach((button) => {
+                button.addEventListener('pointerdown', respond);
+            });
+
+            return () => {
+                buttons.forEach((button) => {
+                    button.removeEventListener('pointerdown', respond);
+                });
+            };
+        }
+    """,
+)
+
 def start_assessment() -> None:
     """Create a fresh in-session assessment record."""
     for key in list(st.session_state):
@@ -438,15 +515,101 @@ def render_context() -> None:
 def render_scales() -> None:
     assessment_header(6, TOTAL_STEPS, "Current stress")
     answers = st.session_state.assessment_answers
-    stress_values = [value for value, _label in STRESS_OPTIONS]
-    stress_labels = dict(STRESS_OPTIONS)
-    saved_stress = int(answers.get("stress", 4))
+    saved_stress = int(answers.get("stress_score", answers.get("stress", 4)))
+
+    st.markdown(
+        """
+        <style>
+            div[data-testid="stSlider"] {
+                padding-top: 0.25rem;
+            }
+
+            div[data-testid="stSlider"] [role="slider"] {
+                min-height: 48px;
+                min-width: 48px;
+            }
+
+            .stress-current {
+                background: #eaf2f8;
+                border: 1px solid #cfe0ef;
+                border-radius: 8px;
+                color: #152238;
+                font-weight: 700;
+                margin: 0.25rem 0 0.75rem;
+                padding: 0.85rem 1rem;
+                text-align: center;
+            }
+
+            .stress-anchors {
+                display: grid;
+                gap: 6px;
+                grid-template-columns: repeat(7, minmax(0, 1fr));
+                margin: 0.4rem 0 1.2rem;
+                width: 100%;
+            }
+
+            .stress-anchor {
+                color: #587084;
+                font-size: 0.78rem;
+                font-weight: 700;
+                line-height: 1.2;
+                min-height: 48px;
+                text-align: center;
+            }
+
+            .stress-anchor span {
+                color: #152238;
+                display: block;
+                font-size: 0.92rem;
+                margin-top: 5px;
+            }
+
+            @media (max-width: 560px) {
+                .stress-anchors {
+                    gap: 4px;
+                }
+
+                .stress-anchor {
+                    font-size: 0.62rem;
+                    overflow-wrap: anywhere;
+                }
+
+                .stress-anchor span {
+                    font-size: 0.82rem;
+                }
+            }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
     with st.form("scales_form"):
-        stress = st.radio(
+        current_selection = st.empty()
+        stress_score = st.slider(
             "How stressed do you feel right now?",
-            stress_values,
-            index=stress_values.index(saved_stress) if saved_stress in stress_values else 3,
-            format_func=lambda value: stress_labels[value],
+            min_value=1,
+            max_value=7,
+            value=saved_stress if saved_stress in STRESS_LABELS else 4,
+            step=1,
+        )
+        stress_label = STRESS_LABELS[stress_score]
+        current_selection.markdown(
+            f'<div class="stress-current">Current selection: {stress_label}</div>',
+            unsafe_allow_html=True,
+        )
+        st.markdown(
+            """
+            <div class="stress-anchors">
+                <div class="stress-anchor">Very Low<span>1</span></div>
+                <div class="stress-anchor">Low<span>2</span></div>
+                <div class="stress-anchor">Slightly Low<span>3</span></div>
+                <div class="stress-anchor">Moderate<span>4</span></div>
+                <div class="stress-anchor">Slightly High<span>5</span></div>
+                <div class="stress-anchor">High<span>6</span></div>
+                <div class="stress-anchor">Very High<span>7</span></div>
+            </div>
+            """,
+            unsafe_allow_html=True,
         )
         left, right = st.columns(2)
         back = left.form_submit_button("Back", use_container_width=True)
@@ -454,7 +617,9 @@ def render_scales() -> None:
     if back:
         previous_step()
     if submitted:
-        answers["stress"] = stress
+        answers["stress"] = stress_score
+        answers["stress_score"] = stress_score
+        answers["stress_label"] = stress_label
         next_step()
 
 
@@ -794,6 +959,11 @@ def render_stroop() -> None:
             _timed_stage(
                 f'<div class="stroop-word" style="color:{STROOP_COLORS[trial["ink"]]}">{trial["word"].upper()}</div>'
             )
+            touch_response = STROOP_TOUCH_RESPONSE_COMPONENT(
+                key=f"stroop_touch_{index}",
+                height=84,
+                on_response_key_change=lambda: None,
+            )
         if st.session_state.stroop_shown_at is None:
             st.session_state.stroop_shown_at = time.monotonic()
 
@@ -816,6 +986,10 @@ def render_stroop() -> None:
             pressed_key = "ArrowLeft"
         elif hotkeys.pressed("stroop_right", key=listener_key):
             pressed_key = "ArrowRight"
+        else:
+            touch_key = getattr(touch_response, "response_key", None)
+            if touch_key in STROOP_KEY_MAP:
+                pressed_key = touch_key
 
         if pressed_key:
             reaction_ms = (time.monotonic() - st.session_state.stroop_shown_at) * 1000
