@@ -3,11 +3,9 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from io import BytesIO
 import random
 import time
 from typing import Any
-import wave
 
 import numpy as np
 import streamlit as st
@@ -35,11 +33,15 @@ STROOP_TRIAL_COUNT = 12
 STROOP_RESPONSE_WINDOW = 1.4
 STROOP_ITI = 0.3
 COUNTING_OPTIONS = ("Not at all", "Occasionally", "Frequently", "Continuously")
-TONE_SAMPLE_RATE = 16_000
-STANDARD_TONE_DURATION_SECONDS = 0.25
-TARGET_TONE_DURATION_SECONDS = 0.35
-STANDARD_TONE_AMPLITUDE = 0.42
-TARGET_TONE_AMPLITUDE = 0.56
+STRESS_LEVELS = (
+    "Very low",
+    "Low",
+    "Somewhat low",
+    "Moderate",
+    "Somewhat high",
+    "High",
+    "Very high",
+)
 
 
 HOLD_REPRODUCTION_COMPONENT = components_v2.component(
@@ -57,17 +59,17 @@ HOLD_REPRODUCTION_COMPONENT = components_v2.component(
             color: white;
             cursor: pointer;
             display: flex;
-            font: 700 16px/1.25 Inter, Arial, sans-serif;
-            height: 210px;
+            font: 700 clamp(13px, 3.4vw, 16px)/1.25 Inter, Arial, sans-serif;
+            height: clamp(150px, 45vw, 210px);
             justify-content: center;
             letter-spacing: .04em;
             overflow: hidden;
-            padding: 34px;
+            padding: clamp(18px, 5vw, 34px);
             position: relative;
             text-align: center;
             touch-action: none;
             user-select: none;
-            width: 210px;
+            width: clamp(150px, 45vw, 210px);
             -webkit-tap-highlight-color: transparent;
         }
         .hold-button::before {
@@ -141,7 +143,8 @@ SUBJECTIVE_DURATION_COMPONENT = components_v2.component(
     "subjective_duration_slider",
     html="""
         <div class="duration-match">
-            <div style="display:flex;justify-content:space-between;font-weight:600;margin-bottom:10px;">
+            <div class="preview-circle"></div>
+            <div style="display:flex;justify-content:space-between;font-weight:600;margin:14px 0 10px;">
                 <span>0 seconds</span>
                 <span id="duration-value">10 seconds</span>
                 <span>20 seconds</span>
@@ -151,11 +154,34 @@ SUBJECTIVE_DURATION_COMPONENT = components_v2.component(
         </div>
     """,
     css="""
-        .duration-match { padding:20px 8px 12px; }
+        .duration-match { padding:20px 8px 12px; text-align:center; }
+        .preview-circle {
+            width: 56px;
+            height: 56px;
+            margin: 0 auto 6px;
+            border-radius: 50%;
+            background: #1976d2;
+            animation: preview-pulse 10s ease-in-out infinite;
+        }
+        @keyframes preview-pulse {
+            0%, 100% { opacity: .3; transform: scale(.72); }
+            50% { opacity: 1; transform: scale(1); }
+        }
         .duration-slider {
             width:100%;
             accent-color:#1976d2;
             height:40px;
+        }
+        .duration-slider::-webkit-slider-thumb {
+            width: 28px;
+            height: 28px;
+            border-radius: 50%;
+        }
+        .duration-slider::-moz-range-thumb {
+            width: 28px;
+            height: 28px;
+            border-radius: 50%;
+            border: none;
         }
     """,
     js="""
@@ -163,9 +189,11 @@ SUBJECTIVE_DURATION_COMPONENT = components_v2.component(
             const { parentElement, setStateValue } = component;
             const slider = parentElement.querySelector('.duration-slider');
             const label = parentElement.querySelector('#duration-value');
+            const preview = parentElement.querySelector('.preview-circle');
 
             const update = () => {
                 label.textContent = slider.value + ' seconds';
+                preview.style.animationDuration = Math.max(Number(slider.value), 0.5) + 's';
                 setStateValue('position', Number(slider.value));
             };
 
@@ -282,34 +310,22 @@ def render_context() -> None:
         next_step()
 
 
-def _vas(label: str, help_text: str, default: int) -> int:
-    return st.slider(label, 0, 100, default, help=help_text)
-
-
 def render_scales() -> None:
     assessment_header(6, TOTAL_STEPS, "Current experience")
-    st.write("Move each marker to the point that best reflects how you feel right now.")
     answers = st.session_state.assessment_answers
     with st.form("scales_form"):
-        fatigue = _vas("How mentally exhausted are you?", "0 = not at all, 100 = extremely", int(answers.get("mental_fatigue", 50)))
-        arousal = _vas("How emotionally activated or overwhelmed are you?", "0 = calm, 100 = extremely activated", int(answers.get("emotional_arousal", 50)))
-        control = _vas("How much control do you currently feel?", "0 = no control, 100 = complete control", int(answers.get("perceived_control", 50)))
-        st.markdown("#### Stress scales")
-        stress = _vas("How stressed do you feel?", "0 = not at all, 100 = extremely", int(answers.get("stress", 50)))
-        anxiety = _vas("How anxious do you currently feel?", "0 = not at all, 100 = extremely", int(answers.get("anxiety", 40)))
+        stress = st.select_slider(
+            "How stressed do you feel right now?",
+            options=STRESS_LEVELS,
+            value=answers.get("stress", "Moderate"),
+        )
         left, right = st.columns(2)
         back = left.form_submit_button("Back", use_container_width=True)
         submitted = right.form_submit_button("Continue", type="primary", use_container_width=True)
     if back:
         previous_step()
     if submitted:
-        answers.update(
-            stress=stress,
-            mental_fatigue=fatigue,
-            emotional_arousal=arousal,
-            perceived_control=control,
-            anxiety=anxiety,
-        )
+        answers.update(stress=stress)
         next_step()
 
 
@@ -358,60 +374,6 @@ def _append_time_task(result: dict[str, Any], metadata: dict[str, Any]) -> None:
     # duplicating the behavioural result in the eventual database transaction.
     if result not in st.session_state.time_task_results:
         st.session_state.time_task_results.append(result)
-
-
-def _build_oddball_trial() -> tuple[bytes, int]:
-    """Create a hidden 30-second oddball stream with unpredictable 2-5 s ITIs."""
-    target_count = random.randint(2, 5)
-    # Eight standards keep targets infrequent and make monitoring sufficient to
-    # disrupt explicit counting without replacing prospective timing as the task.
-    tone_count = target_count + 8
-    first_tone = random.uniform(0.4, 1.0)
-
-    raw_intervals = [random.uniform(2.0, 5.0) for _ in range(tone_count - 1)]
-    available = random.uniform(27.0, 29.0) - first_tone
-    minimum = 2.0 * len(raw_intervals)
-    excess = sum(interval - 2.0 for interval in raw_intervals)
-    scale = min(1.0, (available - minimum) / excess) if excess else 1.0
-    intervals = [2.0 + (interval - 2.0) * scale for interval in raw_intervals]
-
-    onset_times = [first_tone]
-    for interval in intervals:
-        onset_times.append(onset_times[-1] + interval)
-    target_indices = set(random.sample(range(tone_count), target_count))
-
-    # A WAV stream is generated locally so no recordings or external audio assets
-    # are required. Normalized attack/decay envelopes improve laptop audibility
-    # without clicks, and make targets clearly distinct without becoming harsh.
-    samples = np.zeros(30 * TONE_SAMPLE_RATE, dtype=np.float32)
-    for index, onset in enumerate(onset_times):
-        is_target = index in target_indices
-        frequency = 1200 if is_target else 800
-        duration = (
-            TARGET_TONE_DURATION_SECONDS if is_target
-            else STANDARD_TONE_DURATION_SECONDS
-        )
-        amplitude = TARGET_TONE_AMPLITUDE if is_target else STANDARD_TONE_AMPLITUDE
-        tone_length = int(duration * TONE_SAMPLE_RATE)
-        tone_time = np.arange(tone_length) / TONE_SAMPLE_RATE
-        fade_length = int(0.02 * TONE_SAMPLE_RATE)
-        fade = 0.5 - 0.5 * np.cos(np.linspace(0.0, np.pi, fade_length))
-        envelope = np.ones(tone_length, dtype=np.float32)
-        envelope[:fade_length] = fade
-        envelope[-fade_length:] = fade[::-1]
-        tone = np.sin(2 * np.pi * frequency * tone_time) * envelope
-        tone /= np.max(np.abs(tone))
-        tone *= amplitude
-        start = int(onset * TONE_SAMPLE_RATE)
-        samples[start:start + tone_length] += tone
-
-    output = BytesIO()
-    with wave.open(output, "wb") as wav_file:
-        wav_file.setnchannels(1)
-        wav_file.setsampwidth(2)
-        wav_file.setframerate(TONE_SAMPLE_RATE)
-        wav_file.writeframes((samples * 32767).astype("<i2").tobytes())
-    return output.getvalue(), target_count
 
 
 def _make_irregular_pulse_plan(duration: float) -> list[dict[str, float]]:
@@ -522,36 +484,19 @@ def render_prospective() -> None:
     assessment_header(2, TOTAL_STEPS, "Prospective timing", "About 1 min")
     phase = st.session_state.get("task_prospective_phase", "ready")
     if phase == "ready":
-        st.write("Without counting, press Finish when you believe 30 seconds have elapsed.")
+        st.write("This isn't a test — there's nothing to get right, so there's no need to perform.")
         st.write(
-            "While estimating the interval, also monitor the sounds and remember "
-            "how many high-pitched tones you hear."
+            "Just press Start, then press Finish when you believe 30 seconds have passed. "
+            "Try not to count; if you lose track along the way, that's completely fine."
         )
         _timed_stage("<div><strong>The display will not show elapsed time.</strong></div>")
         if st.button("Start 30-second task", type="primary", use_container_width=True):
-            audio, target_count = _build_oddball_trial()
-            st.session_state.task_prospective_audio = audio
-            st.session_state.task_prospective_target_count = target_count
             st.session_state.task_prospective_started = time.monotonic()
             st.session_state.task_prospective_phase = "recording"
             st.rerun()
         navigation_back()
         return
     if phase == "recording":
-        # Hidden autoplay audio so participants cannot use the progress bar as a timer.
-        import base64
-        audio_b64 = base64.b64encode(
-            st.session_state.task_prospective_audio
-        ).decode()
-
-        st.markdown(
-            f'''
-            <audio autoplay style="display:none">
-                <source src="data:audio/wav;base64,{audio_b64}" type="audio/wav">
-            </audio>
-            ''',
-            unsafe_allow_html=True,
-        )
         _timed_stage("<div><strong>Timing in progress</strong><br><small>Respond when you think 30 seconds have passed.</small></div>")
         if st.button("Finish", type="primary", use_container_width=True):
             response = time.monotonic() - st.session_state.task_prospective_started
@@ -563,25 +508,12 @@ def render_prospective() -> None:
                 "signed_error": signed,
                 "absolute_error": abs(signed),
             }
+            _append_time_task(st.session_state.task_prospective_result, {})
             st.session_state.task_prospective_phase = "done"
             st.rerun()
         return
     _timed_stage("<div><strong>Response recorded</strong></div>")
-    with st.form("prospective_auditory_report"):
-        reported_count = st.number_input(
-            "How many high-pitched tones did you hear?", 0, 20, 0, 1
-        )
-        submitted = st.form_submit_button("Continue", type="primary", use_container_width=True)
-    if submitted:
-        target_count = st.session_state.task_prospective_target_count
-        _append_time_task(
-            st.session_state.task_prospective_result,
-            {
-                "actual_target_count": target_count,
-                "participant_reported_target_count": int(reported_count),
-                "oddball_accuracy": int(reported_count == target_count),
-            },
-        )
+    if st.button("Continue", type="primary", use_container_width=True):
         next_step()
 
 
@@ -620,13 +552,13 @@ def render_estimation() -> None:
         st.rerun()
     if phase == "respond":
         st.markdown("**How long did the interval feel?**")
-        st.caption("Move the slider to match the duration you just experienced.")
+        st.caption("Watch the pulsing circle and move the slider until its pace matches the pulse you just experienced.")
         # A non-numeric continuum captures experienced passage of time without
         # prompting conversion into seconds or another chronometric strategy.
         match_result = SUBJECTIVE_DURATION_COMPONENT(
             key="subjective_duration_match",
             default={"position": 10.0},
-            height=110,
+            height=180,
             on_position_change=lambda: None,
         )
         slider_seconds = float(getattr(match_result, "position", 10.0))
@@ -676,12 +608,13 @@ def render_stroop() -> None:
     if not st.session_state.get("stroop_started", False) and "stroop_trials" not in st.session_state:
         with stage.container():
             st.write(
-                "Respond to the ink colour, not the written word. Keep one finger on each "
-                "arrow key and respond as quickly and accurately as possible."
+                "Respond to the ink colour, not the written word. On a keyboard, keep one "
+                "finger on each arrow key; on a touchscreen, use the two buttons below the "
+                "word. Respond as quickly and accurately as possible."
             )
             st.markdown(
                 """
-                <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin:16px 0">
+                <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:12px;margin:16px 0">
                     <div class="research-card" style="text-align:center;margin:0">
                         <strong>Left Arrow</strong><br><span style="color:#1976d2">BLUE ink</span>
                     </div>
@@ -716,19 +649,27 @@ def render_stroop() -> None:
         trial = trials[index]
         with stage.container():
             st.progress(index / len(trials))
-            st.caption("Left Arrow = BLUE  |  Right Arrow = RED")
+            st.caption("Keyboard: Left Arrow = BLUE, Right Arrow = RED  |  Touch: tap a button below")
             _timed_stage(
                 f'<div class="stroop-word" style="color:{STROOP_COLORS[trial["ink"]]}">{trial["word"].upper()}</div>'
+            )
+            tap_left, tap_right = st.columns(2)
+            tapped_blue = tap_left.button(
+                "🔵 BLUE", key=f"stroop_tap_blue_{index}", use_container_width=True
+            )
+            tapped_red = tap_right.button(
+                "🔴 RED", key=f"stroop_tap_red_{index}", use_container_width=True
             )
         if st.session_state.stroop_shown_at is None:
             st.session_state.stroop_shown_at = time.monotonic()
 
-        # Check for a real keypress FIRST. Previously the timeout branch fell
-        # straight into an unconditional "time.sleep(0.1); st.rerun()", and
-        # st.rerun() halts the script immediately — so the hotkey listener
-        # below it never actually ran on any trial. Every trial silently
-        # timed out and was logged as a miss regardless of what the
-        # participant pressed, which is why accuracy was always wrong.
+        # Check for a real keypress or a screen tap FIRST. Previously the
+        # timeout branch fell straight into an unconditional
+        # "time.sleep(0.1); st.rerun()", and st.rerun() halts the script
+        # immediately — so the hotkey listener below it never actually ran
+        # on any trial. Every trial silently timed out and was logged as a
+        # miss regardless of what the participant pressed, which is why
+        # accuracy was always wrong.
         listener_key = f"stroop_trial_{index}"
         hotkeys.activate(
             [
@@ -741,6 +682,15 @@ def render_stroop() -> None:
         if hotkeys.pressed("stroop_left", key=listener_key):
             pressed_key = "ArrowLeft"
         elif hotkeys.pressed("stroop_right", key=listener_key):
+            pressed_key = "ArrowRight"
+        # A tap uses the same downstream mapping as the equivalent arrow key,
+        # so accuracy and reaction-time handling stay identical either way —
+        # reaction time will naturally run a bit slower/noisier on touch,
+        # which is a device-input characteristic worth noting in analysis,
+        # not a bug.
+        if tapped_blue:
+            pressed_key = "ArrowLeft"
+        elif tapped_red:
             pressed_key = "ArrowRight"
 
         if pressed_key:
@@ -813,7 +763,7 @@ def render_review(participant_id: str) -> None:
     st.success("All required task responses are complete.")
     left, middle, right = st.columns(3)
     left.metric("Context", answers.get("activity", "Recorded"))
-    middle.metric("Current stress", f"{answers.get('stress', 0)}/100")
+    middle.metric("Current stress", answers.get('stress', 'Not recorded'))
     right.metric("Tasks completed", "4 of 4")
     reflection = st.text_area(
         "Optional reflection",
