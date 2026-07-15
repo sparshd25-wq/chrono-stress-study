@@ -144,6 +144,9 @@ PULSE_RATE_MATCH_COMPONENT = components_v2.component(
             <div class="preview-wrap" aria-hidden="true">
                 <div class="preview-pulse"></div>
             </div>
+            <div class="pulse-rate-readout" aria-live="polite">
+                Current pulse:<br><strong>0.4 pulses/sec</strong>
+            </div>
 
             <div class="dial-row">
                 <span>SLOWER</span>
@@ -175,15 +178,29 @@ PULSE_RATE_MATCH_COMPONENT = components_v2.component(
             width:100%;
         }
         .preview-pulse {
-            animation: preview-pulse var(--pulse-duration, 1.35s) ease-in-out infinite;
+            animation: preview-pulse var(--pulse-duration, 2.5s) ease-in-out infinite;
             background:#1976d2;
             border-radius:50%;
             box-shadow:0 0 0 12px rgba(25,118,210,.08),
                        0 16px 32px rgba(25,118,210,.18);
             height:118px;
-            opacity:.76;
-            transform:scale(.72);
+            opacity:.82;
+            transform:scale(.90);
             width:118px;
+        }
+        .pulse-rate-readout {
+            background:#eaf2f8;
+            border:1px solid #cfe0ef;
+            border-radius:8px;
+            color:#152238;
+            font:700 15px/1.35 Inter, Arial, sans-serif;
+            min-height:56px;
+            padding:8px 14px;
+            text-align:center;
+            width:min(100%, 240px);
+        }
+        .pulse-rate-readout strong {
+            font-size:18px;
         }
         .dial-row {
             align-items:center;
@@ -233,8 +250,8 @@ PULSE_RATE_MATCH_COMPONENT = components_v2.component(
             width:100%;
         }
         @keyframes preview-pulse {
-            0%, 100% { transform:scale(.72); opacity:.66; }
-            50% { transform:scale(1); opacity:1; }
+            0%, 100% { transform:scale(.90); opacity:.78; }
+            50% { transform:scale(1.15); opacity:1; }
         }
         @media (max-width: 560px) {
             .dial-row {
@@ -256,16 +273,22 @@ PULSE_RATE_MATCH_COMPONENT = components_v2.component(
             const { parentElement, setTriggerValue } = component;
             const dial = parentElement.querySelector('.hold-dial');
             const preview = parentElement.querySelector('.preview-pulse');
-            const minRate = 0.5;
-            const maxRate = 2.5;
+            const readout = parentElement.querySelector('.pulse-rate-readout strong');
+            const minRate = 0.4;
+            const maxRate = 3.0;
             const maxHoldMs = 4200;
             let startedAt = null;
             let animationFrame = null;
             let currentRate = minRate;
 
             const rateFromProgress = (progress) => {
-                const eased = 1 - Math.pow(1 - progress, 2);
+                const eased = progress;
                 return minRate + (maxRate - minRate) * eased;
+            };
+
+            const updatePreview = (rate) => {
+                preview.style.setProperty('--pulse-duration', `${(1 / rate).toFixed(3)}s`);
+                readout.textContent = `${rate.toFixed(1)} pulses/sec`;
             };
 
             const render = () => {
@@ -273,7 +296,7 @@ PULSE_RATE_MATCH_COMPONENT = components_v2.component(
                 const progress = Math.min(1, elapsed / maxHoldMs);
                 currentRate = rateFromProgress(progress);
                 dial.style.setProperty('--fill', `${progress * 360}deg`);
-                preview.style.setProperty('--pulse-duration', `${(1 / currentRate).toFixed(3)}s`);
+                updatePreview(currentRate);
                 animationFrame = requestAnimationFrame(render);
             };
 
@@ -307,7 +330,7 @@ PULSE_RATE_MATCH_COMPONENT = components_v2.component(
                 dial.classList.remove('holding');
             };
 
-            preview.style.setProperty('--pulse-duration', `${(1 / minRate).toFixed(3)}s`);
+            updatePreview(minRate);
             dial.addEventListener('pointerdown', begin);
             dial.addEventListener('pointerup', finish);
             dial.addEventListener('pointercancel', cancel);
@@ -703,8 +726,8 @@ def _pulse_rate_style(elapsed: float, pulse_rate: float) -> str:
     """Return a smooth pulse state for a fixed pulse rate."""
     progress = (elapsed * pulse_rate) % 1.0
     eased = 0.5 - 0.5 * np.cos(2 * np.pi * progress)
-    scale = 0.72 + 0.28 * eased
-    opacity = 0.65 + 0.35 * eased
+    scale = 0.90 + 0.25 * eased
+    opacity = 0.78 + 0.22 * eased
     return f"transform:scale({scale:.4f});opacity:{opacity:.4f}"
 
 
@@ -838,7 +861,7 @@ def render_estimation() -> None:
         _timed_stage("<div><strong>Focus on the visual display.</strong></div>")
         if st.button("Begin display", type="primary", use_container_width=True):
             st.session_state.task_estimation_display_duration = random.uniform(5.0, 10.0)
-            st.session_state.task_estimation_target_pulse_rate = random.uniform(0.7, 1.9)
+            st.session_state.task_estimation_target_pulse_rate = random.uniform(0.4, 3.0)
             st.session_state.task_estimation_started = time.monotonic()
             st.session_state.task_estimation_phase = "display"
             st.rerun()
