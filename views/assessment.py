@@ -276,13 +276,13 @@ PULSE_RATE_MATCH_COMPONENT = components_v2.component(
             const readout = parentElement.querySelector('.pulse-rate-readout strong');
             const minRate = 0.4;
             const maxRate = 3.0;
-            const maxHoldMs = 4200;
+            const maxHoldMs = 12000;
             let startedAt = null;
             let animationFrame = null;
             let currentRate = minRate;
 
             const rateFromProgress = (progress) => {
-                const eased = progress;
+                const eased = Math.pow(progress, 1.8);
                 return minRate + (maxRate - minRate) * eased;
             };
 
