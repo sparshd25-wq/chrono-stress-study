@@ -1,3 +1,4 @@
+
 """Resumable daily EMA and behavioural assessment workflow."""
 
 from __future__ import annotations
@@ -15,15 +16,12 @@ from streamlit.components import v2 as components_v2
 from components.ui import assessment_header
 from config import (
     ACTIVITY_OPTIONS,
-    EVENT_DURATIONS,
-    EVENT_TYPES,
     LOCATION_OPTIONS,
-    WORKLOAD_OPTIONS,
 )
 from database.repository import save_assessment
 
 
-TOTAL_STEPS = 8
+TOTAL_STEPS = 7
 STROOP_COLORS = {
     "Red": "#d64545",
     "Blue": "#1976d2",
@@ -33,14 +31,14 @@ STROOP_TRIAL_COUNT = 12
 STROOP_RESPONSE_WINDOW = 1.4
 STROOP_ITI = 0.3
 COUNTING_OPTIONS = ("Not at all", "Occasionally", "Frequently", "Continuously")
-STRESS_LEVELS = (
-    "Very low",
-    "Low",
-    "Somewhat low",
-    "Moderate",
-    "Somewhat high",
-    "High",
-    "Very high",
+STRESS_OPTIONS = (
+    (1, "Very Low"),
+    (2, "Low"),
+    (3, "Slightly Low"),
+    (4, "Moderate"),
+    (5, "Slightly High"),
+    (6, "High"),
+    (7, "Very High"),
 )
 
 
@@ -59,17 +57,17 @@ HOLD_REPRODUCTION_COMPONENT = components_v2.component(
             color: white;
             cursor: pointer;
             display: flex;
-            font: 700 clamp(13px, 3.4vw, 16px)/1.25 Inter, Arial, sans-serif;
-            height: clamp(150px, 45vw, 210px);
+            font: 700 16px/1.25 Inter, Arial, sans-serif;
+            height: 210px;
             justify-content: center;
             letter-spacing: .04em;
             overflow: hidden;
-            padding: clamp(18px, 5vw, 34px);
+            padding: 34px;
             position: relative;
             text-align: center;
             touch-action: none;
             user-select: none;
-            width: clamp(150px, 45vw, 210px);
+            width: 210px;
             -webkit-tap-highlight-color: transparent;
         }
         .hold-button::before {
@@ -139,62 +137,61 @@ HOLD_REPRODUCTION_COMPONENT = components_v2.component(
 )
 
 
-SUBJECTIVE_DURATION_COMPONENT = components_v2.component(
-    "subjective_duration_slider",
+PULSE_RATE_MATCH_COMPONENT = components_v2.component(
+    "pulse_rate_match_slider",
     html="""
-        <div class="duration-match">
-            <div class="preview-circle"></div>
-            <div style="display:flex;justify-content:space-between;font-weight:600;margin:14px 0 10px;">
-                <span>0 seconds</span>
-                <span id="duration-value">10 seconds</span>
-                <span>20 seconds</span>
+        <div class="pulse-match">
+            <div style="display:flex;justify-content:space-between;font-weight:600;margin-bottom:10px;">
+                <span>Slow pulse</span>
+                <span id="pulse-rate-value">1.20 pulses/sec</span>
+                <span>Fast pulse</span>
             </div>
-            <input class="duration-slider" type="range" min="0" max="20" step="0.5"
-                   value="10" aria-label="Duration estimate">
+            <input class="pulse-rate-slider" type="range" min="0.5" max="2.5" step="0.05"
+                   value="1.2" aria-label="Pulse rhythm match">
+            <div class="pulse-preview-wrap">
+                <div class="pulse-preview"></div>
+            </div>
         </div>
     """,
     css="""
-        .duration-match { padding:20px 8px 12px; text-align:center; }
-        .preview-circle {
-            width: 56px;
-            height: 56px;
-            margin: 0 auto 6px;
-            border-radius: 50%;
-            background: #1976d2;
-            animation: preview-pulse 10s ease-in-out infinite;
-        }
-        @keyframes preview-pulse {
-            0%, 100% { opacity: .3; transform: scale(.72); }
-            50% { opacity: 1; transform: scale(1); }
-        }
-        .duration-slider {
+        .pulse-match { padding:20px 8px 12px; }
+        .pulse-rate-slider {
             width:100%;
             accent-color:#1976d2;
             height:40px;
         }
-        .duration-slider::-webkit-slider-thumb {
-            width: 28px;
-            height: 28px;
-            border-radius: 50%;
+        .pulse-preview-wrap {
+            align-items:center;
+            display:flex;
+            height:180px;
+            justify-content:center;
+            margin-top:18px;
         }
-        .duration-slider::-moz-range-thumb {
-            width: 28px;
-            height: 28px;
-            border-radius: 50%;
-            border: none;
+        .pulse-preview {
+            animation: pulse-preview var(--pulse-duration, .83s) ease-in-out infinite;
+            background:#1976d2;
+            border-radius:50%;
+            height:112px;
+            opacity:.82;
+            width:112px;
+        }
+        @keyframes pulse-preview {
+            0%, 100% { transform:scale(.72); opacity:.65; }
+            50% { transform:scale(1); opacity:1; }
         }
     """,
     js="""
         export default function(component) {
             const { parentElement, setStateValue } = component;
-            const slider = parentElement.querySelector('.duration-slider');
-            const label = parentElement.querySelector('#duration-value');
-            const preview = parentElement.querySelector('.preview-circle');
+            const slider = parentElement.querySelector('.pulse-rate-slider');
+            const label = parentElement.querySelector('#pulse-rate-value');
+            const preview = parentElement.querySelector('.pulse-preview');
 
             const update = () => {
-                label.textContent = slider.value + ' seconds';
-                preview.style.animationDuration = Math.max(Number(slider.value), 0.5) + 's';
-                setStateValue('position', Number(slider.value));
+                const rate = Number(slider.value);
+                label.textContent = rate.toFixed(2) + ' pulses/sec';
+                preview.style.setProperty('--pulse-duration', (1 / rate).toFixed(3) + 's');
+                setStateValue('rate', rate);
             };
 
             slider.addEventListener('input', update);
@@ -296,7 +293,6 @@ def render_context() -> None:
         medication_today = left.radio(
             "Medication taken today?", ("No", "Yes"), horizontal=True
         )
-        workload = right.select_slider("Current workload", options=WORKLOAD_OPTIONS, value="Moderate")
         submitted = st.form_submit_button("Continue", type="primary", use_container_width=True)
     if submitted:
         answers.update(
@@ -305,19 +301,22 @@ def render_context() -> None:
             sleep_hours=sleep_hours,
             caffeine_recent=int(caffeine_recent == "Yes"),
             medication_today=int(medication_today == "Yes"),
-            workload=workload,
         )
         next_step()
 
 
 def render_scales() -> None:
-    assessment_header(6, TOTAL_STEPS, "Current experience")
+    assessment_header(6, TOTAL_STEPS, "Current stress")
     answers = st.session_state.assessment_answers
+    stress_values = [value for value, _label in STRESS_OPTIONS]
+    stress_labels = dict(STRESS_OPTIONS)
+    saved_stress = int(answers.get("stress", 4))
     with st.form("scales_form"):
-        stress = st.select_slider(
+        stress = st.radio(
             "How stressed do you feel right now?",
-            options=STRESS_LEVELS,
-            value=answers.get("stress", "Moderate"),
+            stress_values,
+            index=stress_values.index(saved_stress) if saved_stress in stress_values else 3,
+            format_func=lambda value: stress_labels[value],
         )
         left, right = st.columns(2)
         back = left.form_submit_button("Back", use_container_width=True)
@@ -325,41 +324,7 @@ def render_scales() -> None:
     if back:
         previous_step()
     if submitted:
-        answers.update(stress=stress)
-        next_step()
-
-
-def render_event() -> None:
-    assessment_header(7, TOTAL_STEPS, "Since the previous assessment")
-    answers = st.session_state.assessment_answers
-    happened = st.radio(
-        "Has anything stressful happened since your previous assessment?",
-        ("No", "Yes"), horizontal=True, key="event_happened",
-    )
-    with st.form("event_form"):
-        if happened == "Yes":
-            left, right = st.columns(2)
-            event_type = left.selectbox("Type of event", EVENT_TYPES)
-            event_duration = right.selectbox("How long did it last?", EVENT_DURATIONS)
-            event_upset = st.slider("How emotionally upsetting was it?", 0, 100, 50)
-            event_expected = st.radio("Did you expect the event?", ("No", "Yes"), horizontal=True)
-            event_control = st.slider("How much control did you have?", 0, 100, 50)
-        else:
-            event_type = event_duration = event_upset = event_expected = event_control = None
-        left, right = st.columns(2)
-        back = left.form_submit_button("Back", use_container_width=True)
-        submitted = right.form_submit_button("Continue", type="primary", use_container_width=True)
-    if back:
-        previous_step()
-    if submitted:
-        answers.update(
-            stressful_event=int(happened == "Yes"),
-            event_type=event_type,
-            event_duration=event_duration,
-            event_upset=event_upset,
-            event_expected=int(event_expected == "Yes") if event_expected else None,
-            event_control=event_control,
-        )
+        answers["stress"] = stress
         next_step()
 
 
@@ -374,6 +339,50 @@ def _append_time_task(result: dict[str, Any], metadata: dict[str, Any]) -> None:
     # duplicating the behavioural result in the eventual database transaction.
     if result not in st.session_state.time_task_results:
         st.session_state.time_task_results.append(result)
+
+
+def _assessment_answers_for_storage(answers: dict[str, Any]) -> dict[str, Any]:
+    """Fill legacy database fields that are no longer shown to participants."""
+    return {
+        **answers,
+        "workload": "Not collected",
+        "mental_fatigue": 0,
+        "emotional_arousal": 0,
+        "perceived_control": 0,
+        "anxiety": 0,
+        "stressful_event": 0,
+        "event_type": None,
+        "event_duration": None,
+        "event_upset": None,
+        "event_expected": None,
+        "event_control": None,
+    }
+
+
+def _time_tasks_for_storage(time_tasks: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Map new pulse-rate matching fields onto the unchanged task table."""
+    storage_tasks: list[dict[str, Any]] = []
+    for task in time_tasks:
+        if task["task_type"] != "pulse_matching":
+            storage_tasks.append(task)
+            continue
+
+        matching_error = float(task["matching_error"])
+        storage_task = {
+            **task,
+            "target_seconds": None,
+            "response_seconds": float(task["matched_pulse_rate"]),
+            "signed_error": matching_error,
+            "absolute_error": abs(matching_error),
+            "metadata": {
+                **task.get("metadata", {}),
+                "target_pulse_rate": task["target_pulse_rate"],
+                "matched_pulse_rate": task["matched_pulse_rate"],
+                "matching_error": matching_error,
+            },
+        }
+        storage_tasks.append(storage_task)
+    return storage_tasks
 
 
 def _make_irregular_pulse_plan(duration: float) -> list[dict[str, float]]:
@@ -393,6 +402,15 @@ def _make_irregular_pulse_plan(duration: float) -> list[dict[str, float]]:
         # Independent onset gaps remove the regular beat while preserving the pulse.
         start += pulse_duration + random.uniform(0.18, 0.46)
     return plan
+
+
+def _pulse_rate_style(elapsed: float, pulse_rate: float) -> str:
+    """Return a smooth pulse state for a fixed pulse rate."""
+    progress = (elapsed * pulse_rate) % 1.0
+    eased = 0.5 - 0.5 * np.cos(2 * np.pi * progress)
+    scale = 0.72 + 0.28 * eased
+    opacity = 0.65 + 0.35 * eased
+    return f"transform:scale({scale:.4f});opacity:{opacity:.4f}"
 
 
 def _irregular_pulse_style(elapsed: float, plan: list[dict[str, float]]) -> str:
@@ -484,10 +502,10 @@ def render_prospective() -> None:
     assessment_header(2, TOTAL_STEPS, "Prospective timing", "About 1 min")
     phase = st.session_state.get("task_prospective_phase", "ready")
     if phase == "ready":
-        st.write("This isn't a test — there's nothing to get right, so there's no need to perform.")
+        st.write("This is not a test and there is no correct answer.")
         st.write(
-            "Just press Start, then press Finish when you believe 30 seconds have passed. "
-            "Try not to count; if you lose track along the way, that's completely fine."
+            "Please avoid intentionally counting seconds. Simply allow time to pass "
+            "naturally and press Finish when you believe 30 seconds have elapsed."
         )
         _timed_stage("<div><strong>The display will not show elapsed time.</strong></div>")
         if st.button("Start 30-second task", type="primary", use_container_width=True):
@@ -508,74 +526,67 @@ def render_prospective() -> None:
                 "signed_error": signed,
                 "absolute_error": abs(signed),
             }
-            _append_time_task(st.session_state.task_prospective_result, {})
             st.session_state.task_prospective_phase = "done"
             st.rerun()
         return
     _timed_stage("<div><strong>Response recorded</strong></div>")
     if st.button("Continue", type="primary", use_container_width=True):
+        _append_time_task(st.session_state.task_prospective_result, {})
         next_step()
 
 
 def render_estimation() -> None:
-    assessment_header(3, TOTAL_STEPS, "Subjective passage of time", "Under 1 min")
+    assessment_header(3, TOTAL_STEPS, "Pulse rhythm matching", "Under 1 min")
     phase = st.session_state.get("task_estimation_phase", "ready")
     if phase == "ready":
-        st.write("Watch the visual pulse. Afterwards, indicate how long the interval felt.")
+        st.write("Watch the visual pulse. Afterwards, recreate the pulse rhythm you observed.")
         _timed_stage("<div><strong>Focus on the visual display.</strong></div>")
         if st.button("Begin display", type="primary", use_container_width=True):
-            st.session_state.task_estimation_target = random.uniform(5.0, 10.0)
-            st.session_state.task_estimation_pulse_plan = _make_irregular_pulse_plan(
-                st.session_state.task_estimation_target
-            )
+            st.session_state.task_estimation_display_duration = random.uniform(5.0, 10.0)
+            st.session_state.task_estimation_target_pulse_rate = random.uniform(0.7, 1.9)
             st.session_state.task_estimation_started = time.monotonic()
             st.session_state.task_estimation_phase = "display"
             st.rerun()
         navigation_back()
         return
     if phase == "display":
-        target = st.session_state.task_estimation_target
+        display_duration = st.session_state.task_estimation_display_duration
         elapsed = time.monotonic() - st.session_state.task_estimation_started
-        # Sample a pre-generated irregular pulse plan: cosine easing keeps motion
-        # smooth while jittered pulse/rest durations prevent rhythmic entrainment.
-        pulse_style = _irregular_pulse_style(
-            elapsed, st.session_state.task_estimation_pulse_plan
+        pulse_style = _pulse_rate_style(
+            elapsed, st.session_state.task_estimation_target_pulse_rate
         )
         _timed_stage(
             f'<div class="stimulus-circle" style="{pulse_style};'
             'transition:transform .1s linear,opacity .1s linear"></div>'
         )
-        if elapsed >= target:
+        if elapsed >= display_duration:
             st.session_state.task_estimation_phase = "respond"
             st.rerun()
         time.sleep(.08)
         st.rerun()
     if phase == "respond":
-        st.markdown("**How long did the interval feel?**")
-        st.caption("Watch the pulsing circle and move the slider until its pace matches the pulse you just experienced.")
-        # A non-numeric continuum captures experienced passage of time without
-        # prompting conversion into seconds or another chronometric strategy.
-        match_result = SUBJECTIVE_DURATION_COMPONENT(
-            key="subjective_duration_match",
-            default={"position": 10.0},
-            height=180,
-            on_position_change=lambda: None,
+        st.markdown("**Recreate the pulse rhythm you just observed.**")
+        st.write(
+            "Move the slider until the pulse speed below matches the speed of the "
+            "pulse you just experienced."
         )
-        slider_seconds = float(getattr(match_result, "position", 10.0))
+        st.caption("This pulse feels like the same rhythm I saw earlier.")
+        match_result = PULSE_RATE_MATCH_COMPONENT(
+            key="pulse_rate_match",
+            default={"rate": 1.2},
+            height=300,
+            on_rate_change=lambda: None,
+        )
+        matched_rate = float(getattr(match_result, "rate", 1.2))
         if st.button("Record response", type="primary", use_container_width=True):
-            target = st.session_state.task_estimation_target
-            signed = slider_seconds - target
+            target_rate = st.session_state.task_estimation_target_pulse_rate
             st.session_state.task_estimation_result = {
-                "task_type": "subjective_passage_matching",
-                "target_seconds": target,
-                "response_seconds": slider_seconds,
-                "signed_error": signed,
-                "absolute_error": abs(signed),
+                "task_type": "pulse_matching",
+                "target_pulse_rate": target_rate,
+                "matched_pulse_rate": matched_rate,
+                "matching_error": matched_rate - target_rate,
             }
-            _append_time_task(
-                st.session_state.task_estimation_result,
-                {"response_measure": "slider_seconds_match"},
-            )
+            _append_time_task(st.session_state.task_estimation_result, {})
             st.session_state.task_estimation_phase = "done"
             st.rerun()
         return
@@ -608,13 +619,12 @@ def render_stroop() -> None:
     if not st.session_state.get("stroop_started", False) and "stroop_trials" not in st.session_state:
         with stage.container():
             st.write(
-                "Respond to the ink colour, not the written word. On a keyboard, keep one "
-                "finger on each arrow key; on a touchscreen, use the two buttons below the "
-                "word. Respond as quickly and accurately as possible."
+                "Respond to the ink colour, not the written word. Keep one finger on each "
+                "arrow key and respond as quickly and accurately as possible."
             )
             st.markdown(
                 """
-                <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:12px;margin:16px 0">
+                <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin:16px 0">
                     <div class="research-card" style="text-align:center;margin:0">
                         <strong>Left Arrow</strong><br><span style="color:#1976d2">BLUE ink</span>
                     </div>
@@ -649,27 +659,19 @@ def render_stroop() -> None:
         trial = trials[index]
         with stage.container():
             st.progress(index / len(trials))
-            st.caption("Keyboard: Left Arrow = BLUE, Right Arrow = RED  |  Touch: tap a button below")
+            st.caption("Left Arrow = BLUE  |  Right Arrow = RED")
             _timed_stage(
                 f'<div class="stroop-word" style="color:{STROOP_COLORS[trial["ink"]]}">{trial["word"].upper()}</div>'
-            )
-            tap_left, tap_right = st.columns(2)
-            tapped_blue = tap_left.button(
-                "🔵 BLUE", key=f"stroop_tap_blue_{index}", use_container_width=True
-            )
-            tapped_red = tap_right.button(
-                "🔴 RED", key=f"stroop_tap_red_{index}", use_container_width=True
             )
         if st.session_state.stroop_shown_at is None:
             st.session_state.stroop_shown_at = time.monotonic()
 
-        # Check for a real keypress or a screen tap FIRST. Previously the
-        # timeout branch fell straight into an unconditional
-        # "time.sleep(0.1); st.rerun()", and st.rerun() halts the script
-        # immediately — so the hotkey listener below it never actually ran
-        # on any trial. Every trial silently timed out and was logged as a
-        # miss regardless of what the participant pressed, which is why
-        # accuracy was always wrong.
+        # Check for a real keypress FIRST. Previously the timeout branch fell
+        # straight into an unconditional "time.sleep(0.1); st.rerun()", and
+        # st.rerun() halts the script immediately — so the hotkey listener
+        # below it never actually ran on any trial. Every trial silently
+        # timed out and was logged as a miss regardless of what the
+        # participant pressed, which is why accuracy was always wrong.
         listener_key = f"stroop_trial_{index}"
         hotkeys.activate(
             [
@@ -682,15 +684,6 @@ def render_stroop() -> None:
         if hotkeys.pressed("stroop_left", key=listener_key):
             pressed_key = "ArrowLeft"
         elif hotkeys.pressed("stroop_right", key=listener_key):
-            pressed_key = "ArrowRight"
-        # A tap uses the same downstream mapping as the equivalent arrow key,
-        # so accuracy and reaction-time handling stay identical either way —
-        # reaction time will naturally run a bit slower/noisier on touch,
-        # which is a device-input characteristic worth noting in analysis,
-        # not a bug.
-        if tapped_blue:
-            pressed_key = "ArrowLeft"
-        elif tapped_red:
             pressed_key = "ArrowRight"
 
         if pressed_key:
@@ -758,12 +751,12 @@ def render_stroop() -> None:
 
 
 def render_review(participant_id: str) -> None:
-    assessment_header(8, TOTAL_STEPS, "Review and submit", "Under 1 min")
+    assessment_header(7, TOTAL_STEPS, "Review and submit", "Under 1 min")
     answers = st.session_state.assessment_answers
     st.success("All required task responses are complete.")
     left, middle, right = st.columns(3)
     left.metric("Context", answers.get("activity", "Recorded"))
-    middle.metric("Current stress", answers.get('stress', 'Not recorded'))
+    middle.metric("Current stress", f"{answers.get('stress', 'Recorded')}/7")
     right.metric("Tasks completed", "4 of 4")
     reflection = st.text_area(
         "Optional reflection",
@@ -780,8 +773,8 @@ def render_review(participant_id: str) -> None:
             assessment_id = save_assessment(
                 participant_id,
                 st.session_state.assessment_started_at,
-                answers,
-                st.session_state.time_task_results,
+                _assessment_answers_for_storage(answers),
+                _time_tasks_for_storage(st.session_state.time_task_results),
                 st.session_state.cognitive_result,
             )
         st.session_state.last_assessment_id = assessment_id
@@ -813,9 +806,8 @@ def render_assessment(participant_id: str) -> None:
         4: render_stroop,
         5: render_context,
         6: render_scales,
-        7: render_event,
     }
-    if step == 8:
+    if step == 7:
         render_review(participant_id)
     else:
         renderers[step]()
