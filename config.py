@@ -8,6 +8,10 @@ STUDY_DURATION_DAYS = 21
 DAILY_ASSESSMENT_TARGET = 3
 BASE_DIR = Path(__file__).resolve().parent
 DATABASE_PATH = BASE_DIR / "study_data.db"
+DATA_DIR = BASE_DIR / "data"
+EXPORTS_DIR = BASE_DIR / "exports"
+LOGS_DIR = BASE_DIR / "logs"
+ASSESSMENT_VERSION = "1.0.0"
 
 LOCATION_OPTIONS = (
     "Home",
@@ -46,4 +50,3 @@ EVENT_DURATIONS = (
     "1-3 hours",
     "More than 3 hours",
 )
-
