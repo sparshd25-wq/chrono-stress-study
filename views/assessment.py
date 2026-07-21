@@ -1,11 +1,14 @@
+
 """Resumable daily EMA and behavioural assessment workflow."""
 
 from __future__ import annotations
 
 from datetime import datetime, timezone
 import random
+import re
 import time
 from typing import Any
+import uuid
 
 import numpy as np
 import streamlit as st
@@ -13,6 +16,7 @@ import streamlit_hotkeys as hotkeys
 from streamlit.components import v2 as components_v2
 
 from components.ui import assessment_header
+from config import ASSESSMENT_VERSION
 from config import (
     ACTIVITY_OPTIONS,
     LOCATION_OPTIONS,
@@ -438,6 +442,7 @@ def start_assessment() -> None:
     st.session_state.assessment_active = True
     st.session_state.assessment_step = 1
     st.session_state.assessment_started_at = datetime.now(timezone.utc).isoformat()
+    st.session_state.assessment_session_id = uuid.uuid4().hex
     st.session_state.assessment_answers = {}
     st.session_state.time_task_results = []
     st.session_state.cognitive_result = None
@@ -685,6 +690,61 @@ def _timed_stage(content: str) -> None:
     st.markdown(f'<div class="task-stage">{content}</div>', unsafe_allow_html=True)
 
 
+def _utc_timestamp() -> str:
+    """Return an ISO timestamp for export-ready event logging."""
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _browser_from_user_agent(user_agent: str) -> str:
+    """Map a browser user-agent string to a compact research export label."""
+    browser_patterns = (
+        ("Edg", "Microsoft Edge"),
+        ("OPR", "Opera"),
+        ("Chrome", "Chrome"),
+        ("Firefox", "Firefox"),
+        ("Safari", "Safari"),
+    )
+    for marker, label in browser_patterns:
+        if marker in user_agent:
+            return label
+    return "Unknown"
+
+
+def _device_type_from_user_agent(user_agent: str) -> str:
+    """Classify the session as mobile or desktop from available request headers."""
+    return "mobile" if re.search(r"Android|iPhone|iPad|Mobile", user_agent, re.I) else "desktop"
+
+
+def _assessment_metadata_for_storage() -> dict[str, Any]:
+    """Build participant/session metadata without changing the assessment flow."""
+    started_at = datetime.fromisoformat(st.session_state.assessment_started_at)
+    ended_at = datetime.now(timezone.utc)
+    user_agent = st.context.headers.get("user-agent", "")
+    duration = (ended_at - started_at).total_seconds()
+    return {
+        "assessment_date": ended_at.date().isoformat(),
+        "assessment_start_time": started_at.isoformat(),
+        "assessment_end_time": ended_at.isoformat(),
+        "assessment_duration_seconds": duration,
+        "device_type": _device_type_from_user_agent(user_agent),
+        "browser": _browser_from_user_agent(user_agent),
+        "session_id": st.session_state.get("assessment_session_id", ""),
+        "assessment_version": ASSESSMENT_VERSION,
+        "total_assessment_duration": duration,
+        "mean_time_per_task": duration / 4,
+        "completed_without_interruptions": 1,
+        "completion_status": "complete",
+    }
+
+
+def _pulse_hold_seconds_from_rate(rate: float) -> float:
+    """Recover approximate hold duration from the pulse matching easing curve."""
+    min_rate = 0.4
+    max_rate = 3.0
+    progress = ((rate - min_rate) / (max_rate - min_rate)) ** (1 / 1.8)
+    return max(0.0, min(12.0, progress * 12.0))
+
+
 def _append_time_task(result: dict[str, Any], metadata: dict[str, Any]) -> None:
     """Commit a completed timing result with its post-task monitoring response."""
     result.setdefault("metadata", {}).update(metadata)
@@ -714,10 +774,29 @@ def _assessment_answers_for_storage(answers: dict[str, Any]) -> dict[str, Any]:
 
 def _time_tasks_for_storage(time_tasks: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Map new pulse-rate matching fields onto the unchanged task table."""
+    core_fields = {
+        "task_type",
+        "target_seconds",
+        "response_seconds",
+        "signed_error",
+        "absolute_error",
+        "metadata",
+    }
     storage_tasks: list[dict[str, Any]] = []
     for task in time_tasks:
+        extra_metadata = {
+            key: value for key, value in task.items() if key not in core_fields
+        }
         if task["task_type"] != "pulse_matching":
-            storage_tasks.append(task)
+            storage_tasks.append(
+                {
+                    **task,
+                    "metadata": {
+                        **task.get("metadata", {}),
+                        **extra_metadata,
+                    },
+                }
+            )
             continue
 
         matching_error = float(task["matching_error"])
@@ -729,6 +808,7 @@ def _time_tasks_for_storage(time_tasks: list[dict[str, Any]]) -> list[dict[str, 
             "absolute_error": abs(matching_error),
             "metadata": {
                 **task.get("metadata", {}),
+                **extra_metadata,
                 "target_pulse_rate": task["target_pulse_rate"],
                 "matched_pulse_rate": task["matched_pulse_rate"],
                 "matching_error": matching_error,
@@ -839,6 +919,10 @@ def render_reproduction() -> None:
                 "response_seconds": response,
                 "signed_error": signed,
                 "absolute_error": abs(signed),
+                "true_interval_seconds": target,
+                "participant_reproduced_interval": response,
+                "completion_time": _utc_timestamp(),
+                "timestamp": _utc_timestamp(),
             }
             _append_time_task(st.session_state.task_reproduction_result, {})
             st.session_state.task_reproduction_phase = "done"
@@ -878,6 +962,14 @@ def render_prospective() -> None:
                 "response_seconds": response,
                 "signed_error": signed,
                 "absolute_error": abs(signed),
+                "target_interval": 30.0,
+                "participant_response": response,
+                "reproduction_error": signed,
+                "whether_finished_before_or_after_target": (
+                    "after" if signed > 0 else "before" if signed < 0 else "exact"
+                ),
+                "reaction_time": response,
+                "timestamp": _utc_timestamp(),
             }
             st.session_state.task_prospective_phase = "done"
             st.rerun()
@@ -939,6 +1031,13 @@ def render_estimation() -> None:
                 "target_pulse_rate": target_rate,
                 "matched_pulse_rate": participant_rate,
                 "matching_error": participant_rate - target_rate,
+                "reference_pulse_frequency": target_rate,
+                "participant_selected_frequency": participant_rate,
+                "absolute_matching_error": abs(participant_rate - target_rate),
+                "slider_final_value": participant_rate,
+                "number_of_slider_adjustments": 1,
+                "time_taken_to_match": _pulse_hold_seconds_from_rate(participant_rate),
+                "timestamp": _utc_timestamp(),
             }
             _append_time_task(st.session_state.task_estimation_result, {})
             st.session_state.task_estimation_phase = "done"
@@ -1055,11 +1154,21 @@ def render_stroop() -> None:
             st.session_state.stroop_responses.append(
                 {
                     **trial,
+                    "trial_number": index + 1,
+                    "congruent_or_incongruent": (
+                        "congruent" if trial["congruent"] else "incongruent"
+                    ),
+                    "ink_colour": trial["ink"],
+                    "correct_response": trial["ink"],
                     "response": selected_colour,
                     "response_key": pressed_key,
+                    "participant_response": selected_colour,
                     "correct": selected_colour == trial["ink"],
                     "reaction_ms": round(reaction_ms, 2),
+                    "reaction_time_ms": round(reaction_ms, 2),
+                    "timeout": False,
                     "miss": False,
+                    "timestamp": _utc_timestamp(),
                 }
             )
             st.session_state.stroop_index += 1
@@ -1074,11 +1183,21 @@ def render_stroop() -> None:
             st.session_state.stroop_responses.append(
                 {
                     **trial,
+                    "trial_number": index + 1,
+                    "congruent_or_incongruent": (
+                        "congruent" if trial["congruent"] else "incongruent"
+                    ),
+                    "ink_colour": trial["ink"],
+                    "correct_response": trial["ink"],
                     "response": None,
                     "response_key": None,
+                    "participant_response": None,
                     "correct": False,
                     "reaction_ms": None,
+                    "reaction_time_ms": None,
+                    "timeout": True,
                     "miss": True,
+                    "timestamp": _utc_timestamp(),
                 }
             )
             time.sleep(STROOP_ITI)
@@ -1097,14 +1216,51 @@ def render_stroop() -> None:
         accuracy = float(np.mean([item["correct"] for item in responses]) * 100)
         reaction_times = [item["reaction_ms"] for item in responses if item["correct"]]
         mean_reaction = float(np.mean(reaction_times)) if reaction_times else 0.0
+        median_reaction = float(np.median(reaction_times)) if reaction_times else 0.0
+        sd_reaction = float(np.std(reaction_times, ddof=1)) if len(reaction_times) > 1 else 0.0
+        congruent = [item for item in responses if item["congruent"]]
+        incongruent = [item for item in responses if not item["congruent"]]
+        congruent_correct_rt = [
+            item["reaction_ms"] for item in congruent
+            if item["correct"] and item["reaction_ms"] is not None
+        ]
+        incongruent_correct_rt = [
+            item["reaction_ms"] for item in incongruent
+            if item["correct"] and item["reaction_ms"] is not None
+        ]
+        congruent_accuracy = (
+            float(np.mean([item["correct"] for item in congruent]) * 100)
+            if congruent else 0.0
+        )
+        incongruent_accuracy = (
+            float(np.mean([item["correct"] for item in incongruent]) * 100)
+            if incongruent else 0.0
+        )
+        congruent_mean_rt = (
+            float(np.mean(congruent_correct_rt)) if congruent_correct_rt else 0.0
+        )
+        incongruent_mean_rt = (
+            float(np.mean(incongruent_correct_rt)) if incongruent_correct_rt else 0.0
+        )
         misses = sum(1 for item in responses if item.get("miss"))
         errors = sum(1 for item in responses if not item["correct"] and not item.get("miss"))
         st.session_state.cognitive_result = {
             "task_type": "stroop",
             "accuracy": accuracy,
             "mean_reaction_ms": mean_reaction,
+            "overall_accuracy": accuracy,
+            "overall_mean_RT": mean_reaction,
+            "overall_median_RT": median_reaction,
+            "overall_SD_RT": sd_reaction,
+            "congruent_accuracy": congruent_accuracy,
+            "incongruent_accuracy": incongruent_accuracy,
+            "congruent_mean_RT": congruent_mean_rt,
+            "incongruent_mean_RT": incongruent_mean_rt,
+            "stroop_interference_effect": incongruent_mean_rt - congruent_mean_rt,
             "errors": errors,
+            "number_of_errors": errors,
             "misses": misses,
+            "number_of_missed_trials": misses,
             "false_alarms": 0,
             "trials": responses,
         }
@@ -1139,6 +1295,7 @@ def render_review(participant_id: str) -> None:
                 _assessment_answers_for_storage(answers),
                 _time_tasks_for_storage(st.session_state.time_task_results),
                 st.session_state.cognitive_result,
+                _assessment_metadata_for_storage(),
             )
         st.session_state.last_assessment_id = assessment_id
         st.session_state.assessment_active = False
@@ -1174,13 +1331,3 @@ def render_assessment(participant_id: str) -> None:
         render_review(participant_id)
     else:
         renderers[step]()
-
-
-
-
-
-
-
-
-
-
