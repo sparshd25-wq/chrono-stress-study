@@ -2,21 +2,19 @@
 
 from __future__ import annotations
 
-from datetime import datetime
-
 import pandas as pd
 import streamlit as st
 
 from components.ui import banner, section_heading, wearable_status
 from config import DAILY_ASSESSMENT_TARGET
-from database.repository import participant_frames, study_summary
+from database.repository import all_study_frames, participant_frames, study_summary
 from utils.analytics import (
     add_derived_assessment_metrics,
     correlation_chart,
     multi_trend,
     trend_chart,
 )
-from utils.exports import csv_archive, excel_workbook, json_export
+from utils.exports import csv_bytes, dated_filename, excel_workbook, research_datasets
 
 
 def _latest_value(latest: dict, key: str, suffix: str = "", fallback: str = "--") -> str:
@@ -91,69 +89,82 @@ def render_dashboard(participant_id: str) -> None:
 
 
 def render_analytics(participant_id: str) -> None:
-    frames = participant_frames(participant_id)
-    assessments = add_derived_assessment_metrics(frames["assessments"])
-    wearable = frames["wearable"].copy()
-    tasks = frames["time_tasks"].copy()
-    section_heading("Longitudinal view", "Participant analytics", "Within-person patterns become more informative as daily observations accumulate.")
+    frames = all_study_frames()
+    datasets = research_datasets(frames)
+    summary = datasets["Participant Summary"]
+    stroop = datasets["Stroop Trials"]
+    section_heading(
+        "Research overview",
+        "Pilot analytics",
+        "Analysis-ready tables for monitoring incoming ChronoStress data.",
+    )
 
-    if not wearable.empty:
-        wearable["recorded_at"] = pd.to_datetime(wearable["recorded_at"], utc=True)
-        week = wearable.tail(7)
-        metric_columns = st.columns(4)
-        metric_columns[0].metric("7-day stress", f"{week['stress_score'].mean():.1f}")
-        metric_columns[1].metric("7-day HRV", f"{week['hrv'].mean():.1f} ms")
-        metric_columns[2].metric("7-day sleep", f"{week['sleep_hours'].mean():.1f} h")
-        metric_columns[3].metric("Wearable days", f"{len(wearable)}")
+    if summary.empty:
+        st.info("Completed assessments will appear here once participants submit data.")
+        return
 
-    tabs = st.tabs(["Stress & recovery", "Time perception", "Associations", "Task performance"])
-    with tabs[0]:
-        if wearable.empty:
-            st.info("Wearable observations are not available yet.")
-        else:
-            left, right = st.columns(2)
-            left.plotly_chart(trend_chart(wearable, "recorded_at", "stress_score", "Stress"), use_container_width=True, config={"displayModeBar": False})
-            right.plotly_chart(trend_chart(wearable, "recorded_at", "hrv", "HRV"), use_container_width=True, config={"displayModeBar": False})
-            left.plotly_chart(trend_chart(wearable, "recorded_at", "sleep_hours", "Sleep"), use_container_width=True, config={"displayModeBar": False})
-            right.plotly_chart(trend_chart(wearable, "recorded_at", "recovery_score", "Recovery"), use_container_width=True, config={"displayModeBar": False})
-    with tabs[1]:
-        if tasks.empty:
-            st.info("Complete a daily assessment to begin the time-distortion series.")
-        else:
-            tasks["recorded_at"] = pd.to_datetime(tasks["recorded_at"], utc=True)
-            task_choice = st.selectbox("Task", sorted(tasks["task_type"].unique()))
-            subset = tasks[tasks["task_type"] == task_choice]
-            st.plotly_chart(trend_chart(subset, "recorded_at", "signed_error", "Signed error"), use_container_width=True, config={"displayModeBar": False})
-            st.dataframe(subset[["recorded_at", "target_seconds", "response_seconds", "signed_error", "absolute_error"]], hide_index=True, use_container_width=True)
-    with tabs[2]:
-        if tasks.empty or wearable.empty:
-            st.info("At least one behavioural assessment and wearable observation are needed for association plots.")
-        else:
-            reproduction = tasks[tasks["task_type"] == "time_reproduction"].copy()
-            reproduction["day"] = pd.to_datetime(reproduction["recorded_at"], utc=True).dt.date
-            physiology = wearable.copy()
-            physiology["day"] = physiology["recorded_at"].dt.date
-            merged = reproduction.merge(physiology, on="day", how="inner")
-            if merged.empty:
-                st.info("No same-day wearable and task observations are available yet.")
-            else:
-                selectors = {
-                    "Stress score": "stress_score",
-                    "HRV": "hrv",
-                    "Sleep duration": "sleep_hours",
-                }
-                label = st.selectbox("Physiological predictor", selectors)
-                st.plotly_chart(correlation_chart(merged, selectors[label], "signed_error", label), use_container_width=True, config={"displayModeBar": False})
-                if len(merged) < 3:
-                    st.caption("Trend modelling appears after three matched daily observations.")
-    with tabs[3]:
-        cognitive = frames["cognitive"]
-        if cognitive.empty:
-            st.info("Colour-word task performance will appear after your first assessment.")
-        else:
-            left, right = st.columns(2)
-            left.plotly_chart(trend_chart(cognitive, "recorded_at", "accuracy", "Accuracy"), use_container_width=True, config={"displayModeBar": False})
-            right.plotly_chart(trend_chart(cognitive, "recorded_at", "mean_reaction_ms", "Reaction time"), use_container_width=True, config={"displayModeBar": False})
+    numeric_columns = [
+        "stress_rating",
+        "task1_absolute_error",
+        "task2_absolute_error",
+        "pulse_absolute_matching_error",
+        "stroop_accuracy",
+        "stroop_RT",
+        "assessment_duration",
+    ]
+    for column in numeric_columns:
+        summary[column] = pd.to_numeric(summary[column], errors="coerce")
+    if not stroop.empty:
+        stroop["reaction_time"] = pd.to_numeric(stroop["reaction_time"], errors="coerce")
+
+    congruent_rt = (
+        stroop.loc[
+            (stroop["condition"] == "congruent") & (stroop["accuracy"] == True),
+            "reaction_time",
+        ].mean()
+        if not stroop.empty
+        else pd.NA
+    )
+    incongruent_rt = (
+        stroop.loc[
+            (stroop["condition"] == "incongruent") & (stroop["accuracy"] == True),
+            "reaction_time",
+        ].mean()
+        if not stroop.empty
+        else pd.NA
+    )
+
+    metrics = pd.DataFrame(
+        [
+            {"Metric": "Participant count", "Value": summary["participant_id"].nunique()},
+            {"Metric": "Average stress", "Value": summary["stress_rating"].mean()},
+            {"Metric": "Average Task 1 error", "Value": summary["task1_absolute_error"].mean()},
+            {"Metric": "Average Task 2 error", "Value": summary["task2_absolute_error"].mean()},
+            {
+                "Metric": "Average pulse matching error",
+                "Value": summary["pulse_absolute_matching_error"].mean(),
+            },
+            {"Metric": "Average Stroop accuracy", "Value": summary["stroop_accuracy"].mean()},
+            {"Metric": "Average Stroop RT", "Value": summary["stroop_RT"].mean()},
+            {"Metric": "Average incongruent RT", "Value": incongruent_rt},
+            {"Metric": "Average congruent RT", "Value": congruent_rt},
+            {
+                "Metric": "Average assessment duration",
+                "Value": summary["assessment_duration"].mean(),
+            },
+        ]
+    )
+    metrics["Value"] = metrics["Value"].map(
+        lambda value: "--" if pd.isna(value) else f"{float(value):.2f}"
+    )
+    st.dataframe(metrics, hide_index=True, use_container_width=True)
+
+    st.markdown("#### Participant Summary")
+    st.dataframe(summary, hide_index=True, use_container_width=True)
+
+    if not stroop.empty:
+        st.markdown("#### Stroop Trials")
+        st.dataframe(stroop, hide_index=True, use_container_width=True)
 
 
 def render_export(participant_id: str) -> None:
@@ -195,4 +206,3 @@ def render_protocol() -> None:
     st.markdown("#### Technical support")
     st.write("In a live deployment, the approved study email, withdrawal contact, ethics reference, and adverse-event pathway belong here.")
     st.info("This research application does not provide diagnosis, monitoring, or treatment advice.")
-
