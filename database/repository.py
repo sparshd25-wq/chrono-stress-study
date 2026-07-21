@@ -11,7 +11,14 @@ from typing import Any, Iterator
 import numpy as np
 import pandas as pd
 
-from config import DAILY_ASSESSMENT_TARGET, DATABASE_PATH, STUDY_DURATION_DAYS
+from config import (
+    DAILY_ASSESSMENT_TARGET,
+    DATA_DIR,
+    DATABASE_PATH,
+    EXPORTS_DIR,
+    LOGS_DIR,
+    STUDY_DURATION_DAYS,
+)
 
 
 def utc_now() -> str:
@@ -37,6 +44,9 @@ def connection() -> Iterator[sqlite3.Connection]:
 
 def initialise_database() -> None:
     """Create all tables and indexes if they do not yet exist."""
+    for directory in (DATA_DIR, EXPORTS_DIR, LOGS_DIR):
+        directory.mkdir(parents=True, exist_ok=True)
+
     schema = """
     CREATE TABLE IF NOT EXISTS participants (
         participant_id TEXT PRIMARY KEY,
@@ -140,12 +150,33 @@ def initialise_database() -> None:
         FOREIGN KEY (participant_id) REFERENCES participants(participant_id)
     );
 
+    CREATE TABLE IF NOT EXISTS assessment_metadata (
+        assessment_id INTEGER PRIMARY KEY,
+        participant_id TEXT NOT NULL,
+        assessment_date TEXT NOT NULL,
+        assessment_start_time TEXT NOT NULL,
+        assessment_end_time TEXT NOT NULL,
+        assessment_duration_seconds REAL NOT NULL,
+        device_type TEXT NOT NULL,
+        browser TEXT NOT NULL,
+        session_id TEXT NOT NULL,
+        assessment_version TEXT NOT NULL,
+        total_assessment_duration REAL NOT NULL,
+        mean_time_per_task REAL NOT NULL,
+        completed_without_interruptions INTEGER NOT NULL,
+        completion_status TEXT NOT NULL,
+        FOREIGN KEY (assessment_id) REFERENCES assessments(id),
+        FOREIGN KEY (participant_id) REFERENCES participants(participant_id)
+    );
+
     CREATE INDEX IF NOT EXISTS idx_assessments_participant_time
         ON assessments(participant_id, submitted_at);
     CREATE INDEX IF NOT EXISTS idx_wearable_participant_time
         ON wearable_data(participant_id, recorded_at);
     CREATE INDEX IF NOT EXISTS idx_tasks_participant_time
         ON task_results(participant_id, recorded_at);
+    CREATE INDEX IF NOT EXISTS idx_metadata_participant_time
+        ON assessment_metadata(participant_id, assessment_end_time);
     """
     with connection() as conn:
         conn.executescript(schema)
@@ -209,6 +240,7 @@ def save_assessment(
     answers: dict[str, Any],
     time_tasks: list[dict[str, Any]],
     cognitive: dict[str, Any],
+    assessment_metadata: dict[str, Any] | None = None,
 ) -> int:
     """Atomically save an assessment and all behavioural results."""
     assessment_fields = (
@@ -267,6 +299,22 @@ def save_assessment(
                 utc_now(),
             ),
         )
+
+        if assessment_metadata:
+            metadata_fields = (
+                "assessment_date", "assessment_start_time", "assessment_end_time",
+                "assessment_duration_seconds", "device_type", "browser",
+                "session_id", "assessment_version", "total_assessment_duration",
+                "mean_time_per_task", "completed_without_interruptions",
+                "completion_status",
+            )
+            conn.execute(
+                f"""INSERT OR REPLACE INTO assessment_metadata
+                    (assessment_id, participant_id, {', '.join(metadata_fields)})
+                    VALUES (?, ?, {', '.join('?' for _ in metadata_fields)})""",
+                [assessment_id, participant_id]
+                + [assessment_metadata.get(field) for field in metadata_fields],
+            )
     return assessment_id
 
 
@@ -300,6 +348,24 @@ def participant_frames(participant_id: str) -> dict[str, pd.DataFrame]:
             "SELECT * FROM cognitive_results WHERE participant_id = ? ORDER BY recorded_at",
             (participant_id,),
         ),
+        "metadata": dataframe(
+            """SELECT * FROM assessment_metadata
+               WHERE participant_id = ? ORDER BY assessment_end_time""",
+            (participant_id,),
+        ),
+    }
+
+
+def all_study_frames() -> dict[str, pd.DataFrame]:
+    """Return all tables needed for researcher-wide exports and analytics."""
+    return {
+        "participant": dataframe("SELECT * FROM participants ORDER BY enrolled_at"),
+        "consent": dataframe("SELECT * FROM consents ORDER BY consented_at"),
+        "assessments": dataframe("SELECT * FROM assessments ORDER BY submitted_at"),
+        "wearable": dataframe("SELECT * FROM wearable_data ORDER BY recorded_at"),
+        "time_tasks": dataframe("SELECT * FROM task_results ORDER BY recorded_at"),
+        "cognitive": dataframe("SELECT * FROM cognitive_results ORDER BY recorded_at"),
+        "metadata": dataframe("SELECT * FROM assessment_metadata ORDER BY assessment_end_time"),
     }
 
 
@@ -382,4 +448,3 @@ def study_summary(participant_id: str) -> dict[str, Any]:
         "missing": max(total_expected - len(assessments), 0),
         "wearable": latest,
     }
-
