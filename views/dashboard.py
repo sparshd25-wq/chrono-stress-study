@@ -104,7 +104,7 @@ def render_analytics(participant_id: str) -> None:
         return
 
     numeric_columns = [
-        "stress_rating",
+        "stress_score",
         "task1_absolute_error",
         "task2_absolute_error",
         "absolute_matching_error",
@@ -140,7 +140,7 @@ def render_analytics(participant_id: str) -> None:
     metrics = pd.DataFrame(
         [
             {"Metric": "Participant count", "Value": summary["participant_id"].nunique()},
-            {"Metric": "Average stress", "Value": summary["stress_rating"].mean()},
+            {"Metric": "Average stress", "Value": summary["stress_score"].mean()},
             {"Metric": "Average Task 1 error", "Value": summary["task1_absolute_error"].mean()},
             {"Metric": "Average Task 2 error", "Value": summary["task2_absolute_error"].mean()},
             {
@@ -175,6 +175,7 @@ def render_analytics(participant_id: str) -> None:
 
 
 def _legacy_render_export(participant_id: str) -> None:
+    return
     section_heading("Data portability", "Export participant record")
     st.write(
         "Export all records linked to this participant ID. Files include profile, consent, EMA, "
