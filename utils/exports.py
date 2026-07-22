@@ -14,6 +14,7 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+from pandas.errors import EmptyDataError
 
 from config import ASSESSMENT_VERSION, DATA_DIR
 
@@ -547,7 +548,10 @@ def sync_master_csvs(frames: dict[str, pd.DataFrame], data_dir: Path = DATA_DIR)
         path = data_dir / filename
         current = datasets[dataset_name]
         if path.exists():
-            existing = pd.read_csv(path)
+            try:
+                existing = pd.read_csv(path)
+            except EmptyDataError:
+                existing = pd.DataFrame(columns=current.columns)
             combined = pd.concat([existing, current], ignore_index=True)
             keys = [key for key in MASTER_KEYS[dataset_name] if key in combined.columns]
             combined = combined.drop_duplicates(subset=keys, keep="last")
