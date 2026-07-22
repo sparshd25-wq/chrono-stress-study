@@ -8,9 +8,11 @@ across-participant repeated-measures analyses without post-hoc restructuring.
 
 from __future__ import annotations
 
+from datetime import date, datetime
 from io import BytesIO
 import json
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 import pandas as pd
@@ -565,10 +567,87 @@ def csv_bytes(frame: pd.DataFrame) -> bytes:
     return frame.to_csv(index=False).encode("utf-8")
 
 
-def excel_workbook(frames: dict[str, pd.DataFrame]) -> bytes:
-    """Create ChronoStress_Data.xlsx with the four requested study sheets."""
+def _is_missing(value: Any) -> bool:
+    """Return True for scalar missing values without tripping on lists/dicts."""
+    if isinstance(value, (list, tuple, dict, set, np.ndarray)):
+        return False
+    try:
+        return bool(pd.isna(value))
+    except (TypeError, ValueError):
+        return False
+
+
+def _excel_safe_value(value: Any) -> Any:
+    """Convert a single value into something pandas/openpyxl can always write."""
+    if _is_missing(value):
+        return ""
+    if isinstance(value, pd.Timestamp):
+        return value.isoformat()
+    if isinstance(value, (datetime, date)):
+        return value.isoformat()
+    if isinstance(value, np.ndarray):
+        return json.dumps(value.tolist(), default=str, separators=(",", ":"))
+    if isinstance(value, dict):
+        return json.dumps(value, default=str, sort_keys=True, separators=(",", ":"))
+    if isinstance(value, set):
+        return json.dumps(sorted(value, key=str), default=str, separators=(",", ":"))
+    if isinstance(value, (list, tuple)):
+        return json.dumps(list(value), default=str, separators=(",", ":"))
+    if isinstance(value, np.generic):
+        return value.item()
+    if isinstance(value, (str, int, float, bool)):
+        return value
+    return str(value)
+
+
+def _column_needs_string_sanitizing(series: pd.Series) -> bool:
+    """Inspect a column for nested, numpy, custom, or mixed Python values."""
+    observed_types: set[type] = set()
+    for value in series:
+        if _is_missing(value):
+            continue
+        if isinstance(value, (list, tuple, dict, set, np.ndarray, np.generic)):
+            return True
+        if isinstance(value, (pd.Timestamp, datetime, date)):
+            return True
+        if not isinstance(value, (str, int, float, bool)):
+            return True
+        observed_types.add(type(value))
+    return len(observed_types) > 1
+
+
+def _excel_safe_frame(frame: pd.DataFrame) -> pd.DataFrame:
+    """Inspect every column and return an Excel-safe copy."""
+    safe = frame.copy()
+    for column in safe.columns:
+        if _column_needs_string_sanitizing(safe[column]):
+            safe[column] = safe[column].map(_excel_safe_value)
+        else:
+            safe[column] = safe[column].map(_excel_safe_value)
+    return safe
+
+
+def excel_workbook(
+    frames: dict[str, pd.DataFrame], return_warnings: bool = False
+) -> bytes | tuple[bytes, list[str]]:
+    """Create ChronoStress_Data.xlsx without crashing on Excel-unsafe values."""
     output = BytesIO()
+    warnings: list[str] = []
+    written_sheets = 0
     with pd.ExcelWriter(output, engine="openpyxl") as writer:
         for name in ("Participants", "Daily Assessments", "Stroop Trials", "Raw Events"):
-            frames[name].to_excel(writer, sheet_name=name, index=False)
-    return output.getvalue()
+            try:
+                _excel_safe_frame(frames[name]).to_excel(
+                    writer, sheet_name=name, index=False
+                )
+                written_sheets += 1
+            except Exception as exc:  # pragma: no cover - defensive export fallback
+                warnings.append(f"{name} could not be written: {exc}")
+        if warnings or written_sheets == 0:
+            pd.DataFrame({"warning": warnings or ["No sheets could be written."]}).to_excel(
+                writer, sheet_name="Export Warnings", index=False
+            )
+    payload = output.getvalue()
+    if return_warnings:
+        return payload, warnings
+    return payload
