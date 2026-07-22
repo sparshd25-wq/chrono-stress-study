@@ -180,6 +180,14 @@ def initialise_database() -> None:
     """
     with connection() as conn:
         conn.executescript(schema)
+    _sync_master_exports()
+
+
+def _sync_master_exports() -> None:
+    """Refresh study-level master CSV files from the current SQLite state."""
+    from utils.exports import sync_master_csvs
+
+    sync_master_csvs(all_study_frames())
 
 
 def participant_exists(participant_id: str) -> bool:
@@ -315,6 +323,7 @@ def save_assessment(
                 [assessment_id, participant_id]
                 + [assessment_metadata.get(field) for field in metadata_fields],
             )
+    _sync_master_exports()
     return assessment_id
 
 
