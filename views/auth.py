@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import hmac
 import re
 
 import streamlit as st
 
 from components.ui import banner, section_heading
-from config import STUDY_DURATION_DAYS
+from config import ADMIN_ACCESS_CODE, ADMIN_USERNAME, STUDY_DURATION_DAYS
 from database.repository import (
     create_participant,
     get_participant,
@@ -44,6 +45,20 @@ def _sign_in(participant: dict) -> None:
     st.session_state.active_page = "Dashboard"
     st.session_state.assessment_active = False
     st.session_state.assessment_step = 1
+    st.session_state.user_role = "participant"
+
+
+def _sign_in_admin(username: str) -> None:
+    _clear_participant_scoped_state()
+    st.session_state.participant_id = None
+    st.session_state.authenticated_participant_id = None
+    st.session_state.participant_record = None
+    st.session_state.authenticated = True
+    st.session_state.user_role = "admin"
+    st.session_state.admin_username = username
+    st.session_state.active_page = "Dashboard"
+    st.session_state.assessment_active = False
+    st.session_state.assessment_step = 1
 
 
 def render_welcome() -> None:
@@ -68,6 +83,9 @@ def render_welcome() -> None:
         st.rerun()
     if right.button("Participant sign in", use_container_width=True):
         st.session_state.auth_view = "login"
+        st.rerun()
+    if st.button("Researcher / Admin sign in", use_container_width=True):
+        st.session_state.auth_view = "admin_login"
         st.rerun()
 
 
@@ -223,6 +241,25 @@ def render_login() -> None:
         st.rerun()
 
 
+def render_admin_login() -> None:
+    section_heading("Researcher access", "Admin sign in")
+    st.write("Use the researcher/admin credentials to access study exports and analytics.")
+    with st.form("admin_login_form"):
+        username = st.text_input("Admin username").strip()
+        access_code = st.text_input("Admin access code", type="password")
+        submitted = st.form_submit_button("Sign in as admin", type="primary", use_container_width=True)
+    if submitted:
+        if hmac.compare_digest(username, ADMIN_USERNAME) and hmac.compare_digest(
+            access_code, ADMIN_ACCESS_CODE
+        ):
+            _sign_in_admin(username)
+            st.rerun()
+        st.error("Invalid admin credentials.")
+    if st.button("Back", use_container_width=True):
+        st.session_state.auth_view = "welcome"
+        st.rerun()
+
+
 def render_authentication() -> None:
     view = st.session_state.get("auth_view", "welcome")
     views = {
@@ -230,5 +267,6 @@ def render_authentication() -> None:
         "consent": render_consent,
         "register": render_registration,
         "login": render_login,
+        "admin_login": render_admin_login,
     }
     views.get(view, render_welcome)()
