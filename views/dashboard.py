@@ -14,7 +14,7 @@ from utils.analytics import (
     multi_trend,
     trend_chart,
 )
-from utils.exports import csv_bytes, dated_filename, excel_workbook, research_datasets
+from utils.exports import csv_bytes, excel_workbook, research_datasets
 
 
 def _latest_value(latest: dict, key: str, suffix: str = "", fallback: str = "--") -> str:
@@ -91,7 +91,7 @@ def render_dashboard(participant_id: str) -> None:
 def render_analytics(participant_id: str) -> None:
     frames = all_study_frames()
     datasets = research_datasets(frames)
-    summary = datasets["Participant Summary"]
+    summary = datasets["Daily Assessments"]
     stroop = datasets["Stroop Trials"]
     section_heading(
         "Research overview",
@@ -107,20 +107,23 @@ def render_analytics(participant_id: str) -> None:
         "stress_rating",
         "task1_absolute_error",
         "task2_absolute_error",
-        "pulse_absolute_matching_error",
-        "stroop_accuracy",
-        "stroop_RT",
-        "assessment_duration",
+        "absolute_matching_error",
+        "overall_accuracy",
+        "overall_mean_RT",
+        "stroop_interference_effect",
+        "assessment_duration_seconds",
     ]
     for column in numeric_columns:
         summary[column] = pd.to_numeric(summary[column], errors="coerce")
     if not stroop.empty:
-        stroop["reaction_time"] = pd.to_numeric(stroop["reaction_time"], errors="coerce")
+        stroop["reaction_time_ms"] = pd.to_numeric(
+            stroop["reaction_time_ms"], errors="coerce"
+        )
 
     congruent_rt = (
         stroop.loc[
             (stroop["condition"] == "congruent") & (stroop["accuracy"] == True),
-            "reaction_time",
+            "reaction_time_ms",
         ].mean()
         if not stroop.empty
         else pd.NA
@@ -128,7 +131,7 @@ def render_analytics(participant_id: str) -> None:
     incongruent_rt = (
         stroop.loc[
             (stroop["condition"] == "incongruent") & (stroop["accuracy"] == True),
-            "reaction_time",
+            "reaction_time_ms",
         ].mean()
         if not stroop.empty
         else pd.NA
@@ -142,15 +145,19 @@ def render_analytics(participant_id: str) -> None:
             {"Metric": "Average Task 2 error", "Value": summary["task2_absolute_error"].mean()},
             {
                 "Metric": "Average pulse matching error",
-                "Value": summary["pulse_absolute_matching_error"].mean(),
+                "Value": summary["absolute_matching_error"].mean(),
             },
-            {"Metric": "Average Stroop accuracy", "Value": summary["stroop_accuracy"].mean()},
-            {"Metric": "Average Stroop RT", "Value": summary["stroop_RT"].mean()},
+            {"Metric": "Average Stroop accuracy", "Value": summary["overall_accuracy"].mean()},
+            {"Metric": "Average Stroop RT", "Value": summary["overall_mean_RT"].mean()},
             {"Metric": "Average incongruent RT", "Value": incongruent_rt},
             {"Metric": "Average congruent RT", "Value": congruent_rt},
             {
+                "Metric": "Average Stroop interference",
+                "Value": summary["stroop_interference_effect"].mean(),
+            },
+            {
                 "Metric": "Average assessment duration",
-                "Value": summary["assessment_duration"].mean(),
+                "Value": summary["assessment_duration_seconds"].mean(),
             },
         ]
     )
@@ -159,7 +166,7 @@ def render_analytics(participant_id: str) -> None:
     )
     st.dataframe(metrics, hide_index=True, use_container_width=True)
 
-    st.markdown("#### Participant Summary")
+    st.markdown("#### Daily Assessments")
     st.dataframe(summary, hide_index=True, use_container_width=True)
 
     if not stroop.empty:
@@ -167,7 +174,7 @@ def render_analytics(participant_id: str) -> None:
         st.dataframe(stroop, hide_index=True, use_container_width=True)
 
 
-def render_export(participant_id: str) -> None:
+def _legacy_render_export(participant_id: str) -> None:
     section_heading("Data portability", "Export participant record")
     st.write(
         "Export all records linked to this participant ID. Files include profile, consent, EMA, "
@@ -194,6 +201,63 @@ def render_export(participant_id: str) -> None:
         file_name=f"{participant_id}_study_data.json", mime="application/json",
         use_container_width=True,
     )
+    st.warning("For a live study, researcher-wide exports should sit behind separate role-based authentication and an approved data-management policy.")
+
+
+def render_export(participant_id: str) -> None:
+    section_heading("Data portability", "Longitudinal master datasets")
+    st.write(
+        "Download the study-level files used for the 21-day repeated-measures "
+        "dataset. These are not split by participant or day."
+    )
+    datasets = research_datasets(all_study_frames())
+    participants = datasets["Participants"]
+    daily = datasets["Daily Assessments"]
+    stroop = datasets["Stroop Trials"]
+    raw = datasets["Raw Events"]
+    row_count = len(participants) + len(daily) + len(stroop) + len(raw)
+    st.metric("Rows available", row_count)
+    st.caption("Master CSV files are also maintained in the local data folder.")
+
+    first_row, second_row = st.columns(2)
+    third_row, fourth_row = st.columns(2)
+    first_row.download_button(
+        "Download participants.csv",
+        csv_bytes(participants),
+        file_name="participants.csv",
+        mime="text/csv",
+        use_container_width=True,
+    )
+    second_row.download_button(
+        "Download daily_assessments.csv",
+        csv_bytes(daily),
+        file_name="daily_assessments.csv",
+        mime="text/csv",
+        use_container_width=True,
+    )
+    third_row.download_button(
+        "Download stroop_trials.csv",
+        csv_bytes(stroop),
+        file_name="stroop_trials.csv",
+        mime="text/csv",
+        use_container_width=True,
+    )
+    fourth_row.download_button(
+        "Download raw_events.csv",
+        csv_bytes(raw),
+        file_name="raw_events.csv",
+        mime="text/csv",
+        use_container_width=True,
+    )
+    st.download_button(
+        "Download ChronoStress_Data.xlsx",
+        excel_workbook(datasets),
+        file_name="ChronoStress_Data.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        use_container_width=True,
+    )
+    st.markdown("#### Export Column Dictionary")
+    st.dataframe(datasets["Data Dictionary"], hide_index=True, use_container_width=True)
     st.warning("For a live study, researcher-wide exports should sit behind separate role-based authentication and an approved data-management policy.")
 
 
