@@ -7,7 +7,7 @@ import streamlit as st
 
 from components.ui import banner, section_heading, wearable_status
 from config import DAILY_ASSESSMENT_TARGET
-from database.repository import all_study_frames, participant_frames, study_summary
+from database.repository import participant_frames, study_summary
 from utils.analytics import (
     add_derived_assessment_metrics,
     correlation_chart,
@@ -89,7 +89,7 @@ def render_dashboard(participant_id: str) -> None:
 
 
 def render_analytics(participant_id: str) -> None:
-    frames = all_study_frames()
+    frames = participant_frames(participant_id)
     datasets = research_datasets(frames)
     summary = datasets["Daily Assessments"]
     stroop = datasets["Stroop Trials"]
@@ -139,7 +139,7 @@ def render_analytics(participant_id: str) -> None:
 
     metrics = pd.DataFrame(
         [
-            {"Metric": "Participant count", "Value": summary["participant_id"].nunique()},
+            {"Metric": "Participant count", "Value": 1},
             {"Metric": "Average stress", "Value": summary["stress_score"].mean()},
             {"Metric": "Average Task 1 error", "Value": summary["task1_absolute_error"].mean()},
             {"Metric": "Average Task 2 error", "Value": summary["task2_absolute_error"].mean()},
@@ -208,10 +208,10 @@ def _legacy_render_export(participant_id: str) -> None:
 def render_export(participant_id: str) -> None:
     section_heading("Data portability", "Longitudinal master datasets")
     st.write(
-        "Download the study-level files used for the 21-day repeated-measures "
-        "dataset. These are not split by participant or day."
+        "Download this participant's longitudinal repeated-measures dataset. "
+        "No other participant records are included."
     )
-    datasets = research_datasets(all_study_frames())
+    datasets = research_datasets(participant_frames(participant_id))
     participants = datasets["Participants"]
     daily = datasets["Daily Assessments"]
     stroop = datasets["Stroop Trials"]
