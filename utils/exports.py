@@ -499,6 +499,72 @@ def raw_events_dataset(frames: dict[str, pd.DataFrame]) -> pd.DataFrame:
     return pd.DataFrame(raw_rows, columns=list(RAW_EVENT_COLUMNS))
 
 
+def _drop_blank_separator_rows(frame: pd.DataFrame) -> pd.DataFrame:
+    """Remove visual separator rows before merging or reformatting exports."""
+    if frame.empty:
+        return frame.copy()
+    cleaned = frame.replace(r"^\s*$", pd.NA, regex=True)
+    return frame.loc[~cleaned.isna().all(axis=1)].copy()
+
+
+def _sort_dataset_for_export(name: str, frame: pd.DataFrame) -> pd.DataFrame:
+    """Order exported records by participant, study day, and prompt."""
+    if frame.empty:
+        return frame.copy()
+    sorted_frame = _drop_blank_separator_rows(frame)
+    sort_specs = {
+        "Participants": ["participant_id"],
+        "Daily Assessments": [
+            "participant_id",
+            "day_number",
+            "prompt_number",
+            "assessment_datetime",
+        ],
+        "Stroop Trials": [
+            "participant_id",
+            "day_number",
+            "prompt_number",
+            "trial_number",
+            "timestamp",
+        ],
+        "Raw Events": [
+            "participant_id",
+            "day_number",
+            "prompt_number",
+            "timestamp",
+            "event_name",
+        ],
+    }
+    sort_columns = [
+        column for column in sort_specs.get(name, []) if column in sorted_frame.columns
+    ]
+    if not sort_columns:
+        return sorted_frame
+    return sorted_frame.sort_values(sort_columns, na_position="last").reset_index(drop=True)
+
+
+def _insert_blank_rows_between_participants(frame: pd.DataFrame) -> pd.DataFrame:
+    """Add one blank visual separator row between participant groups."""
+    if frame.empty or "participant_id" not in frame.columns:
+        return frame.copy()
+    rows: list[dict] = []
+    participant_groups = list(frame.groupby("participant_id", dropna=False, sort=False))
+    blank_row = {column: "" for column in frame.columns}
+    for index, (_, group) in enumerate(participant_groups):
+        if index:
+            rows.append(blank_row.copy())
+        rows.extend(group.to_dict("records"))
+    return pd.DataFrame(rows, columns=frame.columns)
+
+
+def _readable_export_frame(name: str, frame: pd.DataFrame) -> pd.DataFrame:
+    """Return an ordered, researcher-friendly export frame."""
+    sorted_frame = _sort_dataset_for_export(name, frame)
+    if name in {"Daily Assessments", "Stroop Trials", "Raw Events"}:
+        return _insert_blank_rows_between_participants(sorted_frame)
+    return sorted_frame
+
+
 def data_dictionary() -> pd.DataFrame:
     """Document every exported column for the study data dictionary."""
     rows = []
@@ -519,15 +585,23 @@ def data_dictionary() -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
-def research_datasets(frames: dict[str, pd.DataFrame]) -> dict[str, pd.DataFrame]:
+def research_datasets(
+    frames: dict[str, pd.DataFrame], readable_exports: bool = False
+) -> dict[str, pd.DataFrame]:
     """Return all master datasets used by export and analytics pages."""
-    return {
+    datasets = {
         "Participants": participants_dataset(frames),
         "Daily Assessments": daily_assessments_dataset(frames),
         "Stroop Trials": stroop_trials_dataset(frames),
         "Raw Events": raw_events_dataset(frames),
         "Data Dictionary": data_dictionary(),
     }
+    for name in ("Participants", "Daily Assessments", "Stroop Trials", "Raw Events"):
+        datasets[name] = _sort_dataset_for_export(name, datasets[name])
+    if readable_exports:
+        for name in ("Daily Assessments", "Stroop Trials", "Raw Events"):
+            datasets[name] = _insert_blank_rows_between_participants(datasets[name])
+    return datasets
 
 
 def validate_unique_assessment_ids(daily: pd.DataFrame) -> None:
@@ -551,7 +625,7 @@ def sync_master_csvs(frames: dict[str, pd.DataFrame], data_dir: Path = DATA_DIR)
         current = datasets[dataset_name]
         if path.exists():
             try:
-                existing = pd.read_csv(path)
+                existing = _drop_blank_separator_rows(pd.read_csv(path))
             except EmptyDataError:
                 existing = pd.DataFrame(columns=current.columns)
             combined = pd.concat([existing, current], ignore_index=True)
@@ -559,7 +633,7 @@ def sync_master_csvs(frames: dict[str, pd.DataFrame], data_dir: Path = DATA_DIR)
             combined = combined.drop_duplicates(subset=keys, keep="last")
         else:
             combined = current
-        combined.to_csv(path, index=False)
+        _readable_export_frame(dataset_name, combined).to_csv(path, index=False)
 
 
 def csv_bytes(frame: pd.DataFrame) -> bytes:
