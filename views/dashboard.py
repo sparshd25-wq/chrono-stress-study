@@ -7,7 +7,7 @@ import streamlit as st
 
 from components.ui import banner, section_heading, wearable_status
 from config import DAILY_ASSESSMENT_TARGET
-from database.repository import participant_frames, study_summary
+from database.repository import all_study_frames, participant_frames, study_summary
 from utils.analytics import (
     add_derived_assessment_metrics,
     correlation_chart,
@@ -88,8 +88,35 @@ def render_dashboard(participant_id: str) -> None:
         st.dataframe(display, hide_index=True, use_container_width=True)
 
 
-def render_analytics(participant_id: str) -> None:
-    frames = participant_frames(participant_id)
+def _require_admin() -> bool:
+    if st.session_state.get("user_role") != "admin":
+        st.error("You do not have permission to access this page.")
+        return False
+    return True
+
+
+def render_admin_dashboard() -> None:
+    if not _require_admin():
+        return
+    frames = all_study_frames()
+    datasets = research_datasets(frames)
+    participants = datasets["Participants"]
+    daily = datasets["Daily Assessments"]
+    section_heading("Research dashboard", "Study overview")
+    metrics = st.columns(4)
+    metrics[0].metric("Participants", len(participants))
+    metrics[1].metric("Completed assessments", len(daily))
+    metrics[2].metric("Stroop trials", len(datasets["Stroop Trials"]))
+    metrics[3].metric("Raw events", len(datasets["Raw Events"]))
+    if not daily.empty:
+        st.markdown("#### Recent Assessments")
+        st.dataframe(daily.tail(10), hide_index=True, use_container_width=True)
+
+
+def render_analytics() -> None:
+    if not _require_admin():
+        return
+    frames = all_study_frames()
     datasets = research_datasets(frames)
     summary = datasets["Daily Assessments"]
     stroop = datasets["Stroop Trials"]
@@ -205,13 +232,14 @@ def _legacy_render_export(participant_id: str) -> None:
     st.warning("For a live study, researcher-wide exports should sit behind separate role-based authentication and an approved data-management policy.")
 
 
-def render_export(participant_id: str) -> None:
+def render_export() -> None:
+    if not _require_admin():
+        return
     section_heading("Data portability", "Longitudinal master datasets")
     st.write(
-        "Download this participant's longitudinal repeated-measures dataset. "
-        "No other participant records are included."
+        "Download the admin-only longitudinal repeated-measures dataset for the full study."
     )
-    datasets = research_datasets(participant_frames(participant_id))
+    datasets = research_datasets(all_study_frames())
     participants = datasets["Participants"]
     daily = datasets["Daily Assessments"]
     stroop = datasets["Stroop Trials"]
@@ -263,6 +291,50 @@ def render_export(participant_id: str) -> None:
     st.markdown("#### Export Column Dictionary")
     st.dataframe(datasets["Data Dictionary"], hide_index=True, use_container_width=True)
     st.warning("For a live study, researcher-wide exports should sit behind separate role-based authentication and an approved data-management policy.")
+
+
+def render_participant_management() -> None:
+    if not _require_admin():
+        return
+    section_heading("Participants", "Participant Management")
+    participants = research_datasets(all_study_frames())["Participants"]
+    if participants.empty:
+        st.info("No participants are enrolled yet.")
+        return
+    st.dataframe(participants, hide_index=True, use_container_width=True)
+
+
+def render_study_progress() -> None:
+    if not _require_admin():
+        return
+    section_heading("Progress", "Study Progress")
+    datasets = research_datasets(all_study_frames())
+    daily = datasets["Daily Assessments"]
+    if daily.empty:
+        st.info("No completed assessments yet.")
+        return
+    progress = (
+        daily.groupby("participant_id")
+        .agg(
+            completed_assessments=("assessment_id", "count"),
+            completed_days=("day_number", "nunique"),
+            latest_day=("day_number", "max"),
+            latest_prompt=("prompt_number", "max"),
+        )
+        .reset_index()
+    )
+    st.dataframe(progress, hide_index=True, use_container_width=True)
+
+
+def render_raw_events() -> None:
+    if not _require_admin():
+        return
+    section_heading("Raw Events", "Debug and reproducibility log")
+    raw = research_datasets(all_study_frames())["Raw Events"]
+    if raw.empty:
+        st.info("No raw events are available yet.")
+        return
+    st.dataframe(raw, hide_index=True, use_container_width=True)
 
 
 def render_protocol() -> None:
