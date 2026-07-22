@@ -239,7 +239,7 @@ def render_export() -> None:
     st.write(
         "Download the admin-only longitudinal repeated-measures dataset for the full study."
     )
-    datasets = research_datasets(all_study_frames())
+    datasets = research_datasets(all_study_frames(), readable_exports=True)
     participants = datasets["Participants"]
     daily = datasets["Daily Assessments"]
     stroop = datasets["Stroop Trials"]
