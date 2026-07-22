@@ -19,10 +19,31 @@ from services.auth import hash_access_code, verify_access_code
 from services.wearables import DemoWearableProvider
 
 
-def _sign_in(participant_id: str) -> None:
+def _clear_participant_scoped_state() -> None:
+    """Remove in-progress assessment data before binding another participant."""
+    preserved = {
+        "authenticated",
+        "participant_id",
+        "authenticated_participant_id",
+        "participant_record",
+        "auth_view",
+        "active_page",
+    }
+    for key in list(st.session_state):
+        if key not in preserved:
+            del st.session_state[key]
+
+
+def _sign_in(participant: dict) -> None:
+    participant_id = participant["participant_id"]
+    _clear_participant_scoped_state()
     st.session_state.participant_id = participant_id
+    st.session_state.authenticated_participant_id = participant_id
+    st.session_state.participant_record = participant
     st.session_state.authenticated = True
     st.session_state.active_page = "Dashboard"
+    st.session_state.assessment_active = False
+    st.session_state.assessment_step = 1
 
 
 def render_welcome() -> None:
@@ -145,9 +166,10 @@ def render_registration() -> None:
                 "study_days": STUDY_DURATION_DAYS,
             }
         )
+        participant = get_participant(participant_id)
         save_consent(participant_id)
         DemoWearableProvider().sync(participant_id)
-        _sign_in(participant_id)
+        _sign_in(participant)
         st.rerun()
     if st.button("Back to consent"):
         st.session_state.auth_view = "consent"
@@ -163,11 +185,39 @@ def render_login() -> None:
         submitted = st.form_submit_button("Sign in", type="primary", use_container_width=True)
     if submitted:
         participant = get_participant(participant_id)
-        if participant and verify_access_code(access_code, participant["access_code_hash"]):
+        if participant is None:
+            if not re.fullmatch(r"[A-Z0-9-]{4,20}", participant_id) or len(access_code) < 6:
+                st.error("Invalid Participant ID or Access Code.")
+                return
+            create_participant(
+                {
+                    "participant_id": participant_id,
+                    "access_code_hash": hash_access_code(access_code),
+                    "age": 18,
+                    "gender": "Prefer not to say",
+                    "occupation": "Not collected",
+                    "academic_status": "Other",
+                    "medication": "Not collected",
+                    "sleep_disorders": "Prefer not to say",
+                    "mental_health_diagnosis": None,
+                    "coffee_per_day": 0,
+                    "smoking": "Prefer not to say",
+                    "alcohol": "Prefer not to say",
+                    "average_sleep_hours": 7.0,
+                    "enrolled_at": datetime.now(timezone.utc).isoformat(),
+                    "study_days": STUDY_DURATION_DAYS,
+                }
+            )
+            participant = get_participant(participant_id)
+        elif not verify_access_code(access_code, participant["access_code_hash"]):
+            st.error("Invalid Participant ID or Access Code.")
+            return
+
+        if participant:
             DemoWearableProvider().sync(participant_id)
-            _sign_in(participant_id)
+            _sign_in(participant)
             st.rerun()
-        st.error("Participant ID or access code was not recognised.")
+        st.error("Invalid Participant ID or Access Code.")
     if st.button("Back", use_container_width=True):
         st.session_state.auth_view = "welcome"
         st.rerun()
@@ -182,4 +232,3 @@ def render_authentication() -> None:
         "login": render_login,
     }
     views.get(view, render_welcome)()
-
