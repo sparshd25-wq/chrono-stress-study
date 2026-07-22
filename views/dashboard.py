@@ -250,9 +250,12 @@ def render_export(participant_id: str) -> None:
         mime="text/csv",
         use_container_width=True,
     )
+    workbook_bytes, workbook_warnings = excel_workbook(datasets, return_warnings=True)
+    for warning in workbook_warnings:
+        st.warning(warning)
     st.download_button(
         "Download ChronoStress_Data.xlsx",
-        excel_workbook(datasets),
+        workbook_bytes,
         file_name="ChronoStress_Data.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         use_container_width=True,
