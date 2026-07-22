@@ -183,24 +183,30 @@ def _base_assessments(frames: dict[str, pd.DataFrame]) -> pd.DataFrame:
     else:
         base["enrolled_at"] = pd.NaT
 
-    base["day_number"] = (
-        base["assessment_datetime"].dt.date - base["enrolled_at"].dt.date
-    ).apply(lambda value: value.days + 1 if pd.notna(value) else np.nan)
     base["assessment_date"] = base["assessment_datetime"].dt.date.astype(str)
     base["assessment_time"] = base["assessment_datetime"].dt.strftime("%H:%M:%S")
     base = base.sort_values(["participant_id", "assessment_datetime", "sqlite_assessment_id"])
-    base["prompt_number"] = (
-        base.groupby(["participant_id", "assessment_date"]).cumcount() + 1
-    )
-    base["assessment_id"] = base.apply(
+    if "day_number" not in base or base["day_number"].isna().all():
+        base["day_number"] = (
+            base["assessment_datetime"].dt.date - base["enrolled_at"].dt.date
+        ).apply(lambda value: value.days + 1 if pd.notna(value) else np.nan)
+    if "prompt_number" not in base or base["prompt_number"].isna().all():
+        base["prompt_number"] = (
+            base.groupby(["participant_id", "assessment_date"]).cumcount() + 1
+        )
+    generated_ids = base.apply(
         lambda row: (
             f"{row['participant_id']}_D{int(row['day_number']):02d}_"
             f"P{int(row['prompt_number']):02d}"
         )
-        if pd.notna(row["day_number"])
+        if pd.notna(row["day_number"]) and pd.notna(row["prompt_number"])
         else f"{row['participant_id']}_A{int(row['sqlite_assessment_id']):04d}",
         axis=1,
     )
+    if "assessment_uid" in base:
+        base["assessment_id"] = base["assessment_uid"].fillna(generated_ids)
+    else:
+        base["assessment_id"] = generated_ids
 
     if not metadata.empty:
         metadata = metadata.rename(columns={"assessment_id": "sqlite_assessment_id"})
