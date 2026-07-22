@@ -1,5 +1,6 @@
 """Application-wide study configuration."""
 
+import os
 from pathlib import Path
 
 
@@ -12,6 +13,8 @@ DATA_DIR = BASE_DIR / "data"
 EXPORTS_DIR = BASE_DIR / "exports"
 LOGS_DIR = BASE_DIR / "logs"
 ASSESSMENT_VERSION = "1.0.0"
+ADMIN_USERNAME = os.getenv("CHRONOSTRESS_ADMIN_USERNAME", "admin")
+ADMIN_ACCESS_CODE = os.getenv("CHRONOSTRESS_ADMIN_ACCESS_CODE", "ChronoStressAdmin2026")
 
 LOCATION_OPTIONS = (
     "Home",
