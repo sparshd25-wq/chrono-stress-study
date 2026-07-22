@@ -180,7 +180,46 @@ def initialise_database() -> None:
     """
     with connection() as conn:
         conn.executescript(schema)
+        _ensure_longitudinal_columns(conn)
     _sync_master_exports()
+
+
+def _ensure_longitudinal_columns(conn: sqlite3.Connection) -> None:
+    """Add participant-specific longitudinal keys to existing databases."""
+    required_columns = {
+        "assessments": {
+            "assessment_uid": "TEXT",
+            "day_number": "INTEGER",
+            "prompt_number": "INTEGER",
+        },
+        "task_results": {
+            "assessment_uid": "TEXT",
+            "day_number": "INTEGER",
+            "prompt_number": "INTEGER",
+        },
+        "cognitive_results": {
+            "assessment_uid": "TEXT",
+            "day_number": "INTEGER",
+            "prompt_number": "INTEGER",
+        },
+        "assessment_metadata": {
+            "assessment_uid": "TEXT",
+            "day_number": "INTEGER",
+            "prompt_number": "INTEGER",
+        },
+    }
+    for table, columns in required_columns.items():
+        existing = {
+            row["name"] for row in conn.execute(f"PRAGMA table_info({table})").fetchall()
+        }
+        for column, column_type in columns.items():
+            if column not in existing:
+                conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {column_type}")
+    conn.execute(
+        """CREATE UNIQUE INDEX IF NOT EXISTS idx_assessment_uid
+           ON assessments(assessment_uid)
+           WHERE assessment_uid IS NOT NULL"""
+    )
 
 
 def _sync_master_exports() -> None:
@@ -188,6 +227,38 @@ def _sync_master_exports() -> None:
     from utils.exports import sync_master_csvs
 
     sync_master_csvs(all_study_frames())
+
+
+def _longitudinal_context(
+    conn: sqlite3.Connection, participant_id: str, submitted_at: str
+) -> dict[str, Any]:
+    participant = conn.execute(
+        "SELECT enrolled_at FROM participants WHERE participant_id = ?", (participant_id,)
+    ).fetchone()
+    if participant is None:
+        raise ValueError("Assessment cannot be saved without a valid participant_id.")
+
+    submitted_date = datetime.fromisoformat(submitted_at).date()
+    enrolled_date = datetime.fromisoformat(participant["enrolled_at"]).date()
+    day_number = (submitted_date - enrolled_date).days + 1
+    prompt_number = int(
+        conn.execute(
+            """SELECT COUNT(*) FROM assessments
+               WHERE participant_id = ? AND date(submitted_at) = date(?)""",
+            (participant_id, submitted_at),
+        ).fetchone()[0]
+    ) + 1
+    assessment_uid = f"{participant_id}_D{day_number:02d}_P{prompt_number:02d}"
+    duplicate = conn.execute(
+        "SELECT 1 FROM assessments WHERE assessment_uid = ?", (assessment_uid,)
+    ).fetchone()
+    if duplicate:
+        raise ValueError(f"Duplicate assessment_id detected: {assessment_uid}")
+    return {
+        "assessment_uid": assessment_uid,
+        "day_number": day_number,
+        "prompt_number": prompt_number,
+    }
 
 
 def participant_exists(participant_id: str) -> bool:
@@ -251,6 +322,8 @@ def save_assessment(
     assessment_metadata: dict[str, Any] | None = None,
 ) -> int:
     """Atomically save an assessment and all behavioural results."""
+    if not participant_id:
+        raise ValueError("Assessment cannot be saved without a participant_id.")
     assessment_fields = (
         "location", "activity", "sleep_hours", "caffeine_recent",
         "medication_today", "workload", "stress", "mental_fatigue",
@@ -259,11 +332,21 @@ def save_assessment(
         "event_expected", "event_control", "reflection",
     )
     with connection() as conn:
+        submitted_at = utc_now()
+        context = _longitudinal_context(conn, participant_id, submitted_at)
         cursor = conn.execute(
             f"""INSERT INTO assessments
-                (participant_id, started_at, submitted_at, {', '.join(assessment_fields)})
-                VALUES (?, ?, ?, {', '.join('?' for _ in assessment_fields)})""",
-            [participant_id, started_at, utc_now()]
+                (participant_id, assessment_uid, day_number, prompt_number,
+                 started_at, submitted_at, {', '.join(assessment_fields)})
+                VALUES (?, ?, ?, ?, ?, ?, {', '.join('?' for _ in assessment_fields)})""",
+            [
+                participant_id,
+                context["assessment_uid"],
+                context["day_number"],
+                context["prompt_number"],
+                started_at,
+                submitted_at,
+            ]
             + [answers.get(field) for field in assessment_fields],
         )
         assessment_id = int(cursor.lastrowid)
@@ -271,32 +354,40 @@ def save_assessment(
         for task in time_tasks:
             conn.execute(
                 """INSERT INTO task_results
-                   (assessment_id, participant_id, task_type, target_seconds,
+                   (assessment_id, assessment_uid, participant_id, day_number,
+                    prompt_number, task_type, target_seconds,
                     response_seconds, signed_error, absolute_error, recorded_at,
                     metadata_json)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     assessment_id,
+                    context["assessment_uid"],
                     participant_id,
+                    context["day_number"],
+                    context["prompt_number"],
                     task["task_type"],
                     task.get("target_seconds"),
                     task["response_seconds"],
                     task["signed_error"],
                     task["absolute_error"],
-                    utc_now(),
+                    submitted_at,
                     json.dumps(task.get("metadata", {})),
                 ),
             )
 
         conn.execute(
             """INSERT INTO cognitive_results
-               (assessment_id, participant_id, task_type, accuracy,
+               (assessment_id, assessment_uid, participant_id, day_number,
+                prompt_number, task_type, accuracy,
                 mean_reaction_ms, errors, misses, false_alarms, trials_json,
                 recorded_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 assessment_id,
+                context["assessment_uid"],
                 participant_id,
+                context["day_number"],
+                context["prompt_number"],
                 cognitive["task_type"],
                 cognitive["accuracy"],
                 cognitive["mean_reaction_ms"],
@@ -304,24 +395,31 @@ def save_assessment(
                 cognitive["misses"],
                 cognitive["false_alarms"],
                 json.dumps(cognitive["trials"]),
-                utc_now(),
+                submitted_at,
             ),
         )
 
         if assessment_metadata:
             metadata_fields = (
-                "assessment_date", "assessment_start_time", "assessment_end_time",
+                "assessment_uid", "day_number", "prompt_number", "assessment_date",
+                "assessment_start_time", "assessment_end_time",
                 "assessment_duration_seconds", "device_type", "browser",
                 "session_id", "assessment_version", "total_assessment_duration",
                 "mean_time_per_task", "completed_without_interruptions",
                 "completion_status",
             )
+            metadata_payload = {
+                **assessment_metadata,
+                "assessment_uid": context["assessment_uid"],
+                "day_number": context["day_number"],
+                "prompt_number": context["prompt_number"],
+            }
             conn.execute(
                 f"""INSERT OR REPLACE INTO assessment_metadata
                     (assessment_id, participant_id, {', '.join(metadata_fields)})
                     VALUES (?, ?, {', '.join('?' for _ in metadata_fields)})""",
                 [assessment_id, participant_id]
-                + [assessment_metadata.get(field) for field in metadata_fields],
+                + [metadata_payload.get(field) for field in metadata_fields],
             )
     _sync_master_exports()
     return assessment_id
