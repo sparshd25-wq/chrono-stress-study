@@ -14,7 +14,12 @@ from utils.analytics import (
     multi_trend,
     trend_chart,
 )
-from utils.exports import csv_bytes, excel_workbook, research_datasets
+from utils.exports import (
+    csv_bytes,
+    excel_workbook,
+    format_india_datetime,
+    research_datasets,
+)
 
 
 def _latest_value(latest: dict, key: str, suffix: str = "", fallback: str = "--") -> str:
@@ -50,7 +55,8 @@ def render_dashboard(participant_id: str) -> None:
         section_heading("Wearable", "Connection status")
         with st.container(border=True):
             wearable_status(latest.get("provider", "Oura demo"))
-            st.caption(f"Last sync: {str(latest.get('recorded_at', 'Not available'))[:16].replace('T', ' ')} UTC")
+            last_sync = format_india_datetime(latest.get("recorded_at"))
+            st.caption(f"Last sync: {last_sync or 'Not available'}")
             st.progress(int(latest.get("battery", 0)) / 100)
             st.caption(f"Device battery {int(latest.get('battery', 0))}%")
 
@@ -83,7 +89,7 @@ def render_dashboard(participant_id: str) -> None:
         st.info("Your completed assessments will appear here.")
     else:
         display = assessments.tail(5)[["submitted_at", "activity", "stress", "mental_fatigue", "workload"]].copy()
-        display["submitted_at"] = pd.to_datetime(display["submitted_at"]).dt.strftime("%d %b, %H:%M")
+        display["submitted_at"] = display["submitted_at"].apply(format_india_datetime)
         display.columns = ["Submitted", "Activity", "Stress", "Mental fatigue", "Workload"]
         st.dataframe(display, hide_index=True, use_container_width=True)
 
@@ -297,11 +303,59 @@ def render_participant_management() -> None:
     if not _require_admin():
         return
     section_heading("Participants", "Participant Management")
-    participants = research_datasets(all_study_frames())["Participants"]
+    expected_prompts = 21 * 3
+    datasets = research_datasets(all_study_frames())
+    participants = datasets["Participants"]
+    daily = datasets["Daily Assessments"]
     if participants.empty:
         st.info("No participants are enrolled yet.")
         return
-    st.dataframe(participants, hide_index=True, use_container_width=True)
+
+    completed = (
+        daily.groupby("participant_id")["assessment_id"].nunique()
+        if not daily.empty
+        else pd.Series(dtype="int64")
+    )
+    management = participants.copy()
+    management["Completed Prompts"] = (
+        management["participant_id"].map(completed).fillna(0).astype(int)
+    )
+    management["Expected Prompts"] = expected_prompts
+    management["Completion %"] = (
+        management["Completed Prompts"] / expected_prompts * 100
+    ).round(1)
+
+    def adherence_status(percentage: float) -> str:
+        if percentage < 25:
+            return "🔴 Needs Follow-up"
+        if percentage < 75:
+            return "🟡 In Progress"
+        if percentage < 100:
+            return "🟢 Nearly Complete"
+        return "✅ Completed"
+
+    management["Status"] = management["Completion %"].apply(adherence_status)
+    management["Progress"] = management["Completion %"]
+    management = management.sort_values(
+        ["Completion %", "participant_id"], ascending=[True, True]
+    ).reset_index(drop=True)
+    st.dataframe(
+        management,
+        hide_index=True,
+        use_container_width=True,
+        column_config={
+            "Progress": st.column_config.ProgressColumn(
+                "Progress",
+                min_value=0,
+                max_value=100,
+                format="%.1f%%",
+            ),
+            "Completion %": st.column_config.NumberColumn(
+                "Completion %",
+                format="%.1f%%",
+            ),
+        },
+    )
 
 
 def render_study_progress() -> None:
@@ -320,6 +374,7 @@ def render_study_progress() -> None:
             completed_days=("day_number", "nunique"),
             latest_day=("day_number", "max"),
             latest_prompt=("prompt_number", "max"),
+            last_completed_time=("assessment_datetime", "max"),
         )
         .reset_index()
     )
