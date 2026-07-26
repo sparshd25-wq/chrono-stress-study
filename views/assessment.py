@@ -1,14 +1,11 @@
-
 """Resumable daily EMA and behavioural assessment workflow."""
 
 from __future__ import annotations
 
 from datetime import datetime, timezone
 import random
-import re
 import time
 from typing import Any
-import uuid
 
 import numpy as np
 import streamlit as st
@@ -16,7 +13,6 @@ import streamlit_hotkeys as hotkeys
 from streamlit.components import v2 as components_v2
 
 from components.ui import assessment_header
-from config import ASSESSMENT_VERSION
 from config import (
     ACTIVITY_OPTIONS,
     LOCATION_OPTIONS,
@@ -148,16 +144,11 @@ PULSE_RATE_MATCH_COMPONENT = components_v2.component(
                 <div class="preview-pulse"></div>
             </div>
             <div class="pulse-rate-readout" aria-live="polite">
-                Current pulse:<br><strong>0.4 pulses/sec</strong>
+                <strong>0.4 pulses/sec</strong>
             </div>
-
-            <div class="dial-row">
-                <span>SLOWER</span>
-                <button type="button" class="hold-dial" aria-label="Hold to match pulse rhythm">
-                    <span class="dial-core"></span>
-                </button>
-                <span>FASTER</span>
-            </div>
+            <button type="button" class="hold-dial" aria-label="Hold to match pulse rhythm">
+                <span class="dial-core"></span>
+            </button>
         </div>
     """,
     css="""
@@ -169,14 +160,14 @@ PULSE_RATE_MATCH_COMPONENT = components_v2.component(
             color:#152238;
             display:flex;
             flex-direction:column;
-            gap:24px;
+            gap:12px;
             justify-content:center;
-            padding:18px 8px 28px;
+            padding:10px 8px 14px;
         }
         .preview-wrap {
             align-items:center;
             display:flex;
-            height:170px;
+            height:clamp(80px, 22vw, 100px);
             justify-content:center;
             width:100%;
         }
@@ -184,40 +175,22 @@ PULSE_RATE_MATCH_COMPONENT = components_v2.component(
             animation: preview-pulse var(--pulse-duration, 2.5s) ease-in-out infinite;
             background:#1976d2;
             border-radius:50%;
-            box-shadow:0 0 0 12px rgba(25,118,210,.08),
-                       0 16px 32px rgba(25,118,210,.18);
-            height:118px;
+            box-shadow:0 0 0 10px rgba(25,118,210,.08),
+                       0 12px 24px rgba(25,118,210,.18);
+            height:clamp(56px, 16vw, 72px);
             opacity:.82;
             transform:scale(.90);
-            width:118px;
+            width:clamp(56px, 16vw, 72px);
         }
         .pulse-rate-readout {
             background:#eaf2f8;
             border:1px solid #cfe0ef;
             border-radius:8px;
             color:#152238;
-            font:700 15px/1.35 Inter, Arial, sans-serif;
-            min-height:56px;
-            padding:8px 14px;
+            font:700 15px/1.2 Inter, Arial, sans-serif;
+            padding:6px 14px;
             text-align:center;
-            width:min(100%, 240px);
-        }
-        .pulse-rate-readout strong {
-            font-size:18px;
-        }
-        .dial-row {
-            align-items:center;
-            display:grid;
-            gap:18px;
-            grid-template-columns:minmax(76px, 1fr) auto minmax(76px, 1fr);
-            max-width:520px;
-            width:100%;
-        }
-        .dial-row span {
-            color:#587084;
-            font:700 13px/1 Inter, Arial, sans-serif;
-            letter-spacing:.12em;
-            text-align:center;
+            width:min(100%, 220px);
         }
         .hold-dial {
             --fill:0deg;
@@ -228,12 +201,12 @@ PULSE_RATE_MATCH_COMPONENT = components_v2.component(
             box-shadow:0 12px 30px rgba(21,34,56,.16);
             cursor:pointer;
             display:flex;
-            height:148px;
+            height:clamp(96px, 28vw, 130px);
             justify-content:center;
-            padding:12px;
+            padding:10px;
             touch-action:none;
             user-select:none;
-            width:148px;
+            width:clamp(96px, 28vw, 130px);
             -webkit-tap-highlight-color:transparent;
         }
         .hold-dial:focus-visible {
@@ -256,20 +229,6 @@ PULSE_RATE_MATCH_COMPONENT = components_v2.component(
             0%, 100% { transform:scale(.90); opacity:.78; }
             50% { transform:scale(1.15); opacity:1; }
         }
-        @media (max-width: 560px) {
-            .dial-row {
-                gap:10px;
-                grid-template-columns:minmax(58px, 1fr) auto minmax(58px, 1fr);
-            }
-            .dial-row span {
-                font-size:11px;
-                letter-spacing:.08em;
-            }
-            .hold-dial {
-                height:126px;
-                width:126px;
-            }
-        }
     """,
     js="""
         export default function(component) {
@@ -279,15 +238,18 @@ PULSE_RATE_MATCH_COMPONENT = components_v2.component(
             const readout = parentElement.querySelector('.pulse-rate-readout strong');
             const minRate = 0.4;
             const maxRate = 3.0;
-            const maxHoldMs = 12000;
+            const maxHoldMs = 15000;
             let startedAt = null;
             let animationFrame = null;
             let currentRate = minRate;
 
-            const rateFromProgress = (progress) => {
-                const eased = Math.pow(progress, 1.8);
-                return minRate + (maxRate - minRate) * eased;
-            };
+            // Linear ramp: the pulse now speeds up at a constant, predictable
+            // pace for the entire hold. The previous progress^1.8 curve barely
+            // moved at first then accelerated hard near the end, which is why
+            // participants kept overshooting and missing their target — by
+            // the time it felt like it was doing anything, it was too late to
+            // release precisely.
+            const rateFromProgress = (progress) => minRate + (maxRate - minRate) * progress;
 
             const updatePreview = (rate) => {
                 preview.style.setProperty('--pulse-duration', `${(1 / rate).toFixed(3)}s`);
@@ -442,7 +404,6 @@ def start_assessment() -> None:
     st.session_state.assessment_active = True
     st.session_state.assessment_step = 1
     st.session_state.assessment_started_at = datetime.now(timezone.utc).isoformat()
-    st.session_state.assessment_session_id = uuid.uuid4().hex
     st.session_state.assessment_answers = {}
     st.session_state.time_task_results = []
     st.session_state.cognitive_result = None
@@ -690,61 +651,6 @@ def _timed_stage(content: str) -> None:
     st.markdown(f'<div class="task-stage">{content}</div>', unsafe_allow_html=True)
 
 
-def _utc_timestamp() -> str:
-    """Return an ISO timestamp for export-ready event logging."""
-    return datetime.now(timezone.utc).isoformat()
-
-
-def _browser_from_user_agent(user_agent: str) -> str:
-    """Map a browser user-agent string to a compact research export label."""
-    browser_patterns = (
-        ("Edg", "Microsoft Edge"),
-        ("OPR", "Opera"),
-        ("Chrome", "Chrome"),
-        ("Firefox", "Firefox"),
-        ("Safari", "Safari"),
-    )
-    for marker, label in browser_patterns:
-        if marker in user_agent:
-            return label
-    return "Unknown"
-
-
-def _device_type_from_user_agent(user_agent: str) -> str:
-    """Classify the session as mobile or desktop from available request headers."""
-    return "mobile" if re.search(r"Android|iPhone|iPad|Mobile", user_agent, re.I) else "desktop"
-
-
-def _assessment_metadata_for_storage() -> dict[str, Any]:
-    """Build participant/session metadata without changing the assessment flow."""
-    started_at = datetime.fromisoformat(st.session_state.assessment_started_at)
-    ended_at = datetime.now(timezone.utc)
-    user_agent = st.context.headers.get("user-agent", "")
-    duration = (ended_at - started_at).total_seconds()
-    return {
-        "assessment_date": ended_at.date().isoformat(),
-        "assessment_start_time": started_at.isoformat(),
-        "assessment_end_time": ended_at.isoformat(),
-        "assessment_duration_seconds": duration,
-        "device_type": _device_type_from_user_agent(user_agent),
-        "browser": _browser_from_user_agent(user_agent),
-        "session_id": st.session_state.get("assessment_session_id", ""),
-        "assessment_version": ASSESSMENT_VERSION,
-        "total_assessment_duration": duration,
-        "mean_time_per_task": duration / 4,
-        "completed_without_interruptions": 1,
-        "completion_status": "complete",
-    }
-
-
-def _pulse_hold_seconds_from_rate(rate: float) -> float:
-    """Recover approximate hold duration from the pulse matching easing curve."""
-    min_rate = 0.4
-    max_rate = 3.0
-    progress = ((rate - min_rate) / (max_rate - min_rate)) ** (1 / 1.8)
-    return max(0.0, min(12.0, progress * 12.0))
-
-
 def _append_time_task(result: dict[str, Any], metadata: dict[str, Any]) -> None:
     """Commit a completed timing result with its post-task monitoring response."""
     result.setdefault("metadata", {}).update(metadata)
@@ -774,29 +680,10 @@ def _assessment_answers_for_storage(answers: dict[str, Any]) -> dict[str, Any]:
 
 def _time_tasks_for_storage(time_tasks: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Map new pulse-rate matching fields onto the unchanged task table."""
-    core_fields = {
-        "task_type",
-        "target_seconds",
-        "response_seconds",
-        "signed_error",
-        "absolute_error",
-        "metadata",
-    }
     storage_tasks: list[dict[str, Any]] = []
     for task in time_tasks:
-        extra_metadata = {
-            key: value for key, value in task.items() if key not in core_fields
-        }
         if task["task_type"] != "pulse_matching":
-            storage_tasks.append(
-                {
-                    **task,
-                    "metadata": {
-                        **task.get("metadata", {}),
-                        **extra_metadata,
-                    },
-                }
-            )
+            storage_tasks.append(task)
             continue
 
         matching_error = float(task["matching_error"])
@@ -808,7 +695,6 @@ def _time_tasks_for_storage(time_tasks: list[dict[str, Any]]) -> list[dict[str, 
             "absolute_error": abs(matching_error),
             "metadata": {
                 **task.get("metadata", {}),
-                **extra_metadata,
                 "target_pulse_rate": task["target_pulse_rate"],
                 "matched_pulse_rate": task["matched_pulse_rate"],
                 "matching_error": matching_error,
@@ -919,10 +805,6 @@ def render_reproduction() -> None:
                 "response_seconds": response,
                 "signed_error": signed,
                 "absolute_error": abs(signed),
-                "true_interval_seconds": target,
-                "participant_reproduced_interval": response,
-                "completion_time": _utc_timestamp(),
-                "timestamp": _utc_timestamp(),
             }
             _append_time_task(st.session_state.task_reproduction_result, {})
             st.session_state.task_reproduction_phase = "done"
@@ -962,14 +844,6 @@ def render_prospective() -> None:
                 "response_seconds": response,
                 "signed_error": signed,
                 "absolute_error": abs(signed),
-                "target_interval": 30.0,
-                "participant_response": response,
-                "reproduction_error": signed,
-                "whether_finished_before_or_after_target": (
-                    "after" if signed > 0 else "before" if signed < 0 else "exact"
-                ),
-                "reaction_time": response,
-                "timestamp": _utc_timestamp(),
             }
             st.session_state.task_prospective_phase = "done"
             st.rerun()
@@ -1010,16 +884,13 @@ def render_estimation() -> None:
         time.sleep(.08)
         st.rerun()
     if phase == "respond":
-        st.markdown("### Pulse rhythm matching")
         st.write(
-            "Recreate the pulse rhythm you just observed.\n\n"
-            "Press and hold the circular control until the pulse below feels like "
-            "the same rhythm you experienced previously.\n\n"
-            "Release when it feels like a match."
+            "Hold the button below. The pulse will speed up steadily the longer you hold — "
+            "let go the moment its speed matches what you just watched."
         )
         match_result = PULSE_RATE_MATCH_COMPONENT(
             key="pulse_rate_match",
-            height=360,
+            height=320,
             on_matched_rate_change=lambda: None,
         )
         matched_rate = getattr(match_result, "matched_rate", None)
@@ -1031,13 +902,6 @@ def render_estimation() -> None:
                 "target_pulse_rate": target_rate,
                 "matched_pulse_rate": participant_rate,
                 "matching_error": participant_rate - target_rate,
-                "reference_pulse_frequency": target_rate,
-                "participant_selected_frequency": participant_rate,
-                "absolute_matching_error": abs(participant_rate - target_rate),
-                "slider_final_value": participant_rate,
-                "number_of_slider_adjustments": 1,
-                "time_taken_to_match": _pulse_hold_seconds_from_rate(participant_rate),
-                "timestamp": _utc_timestamp(),
             }
             _append_time_task(st.session_state.task_estimation_result, {})
             st.session_state.task_estimation_phase = "done"
@@ -1154,21 +1018,11 @@ def render_stroop() -> None:
             st.session_state.stroop_responses.append(
                 {
                     **trial,
-                    "trial_number": index + 1,
-                    "congruent_or_incongruent": (
-                        "congruent" if trial["congruent"] else "incongruent"
-                    ),
-                    "ink_colour": trial["ink"],
-                    "correct_response": trial["ink"],
                     "response": selected_colour,
                     "response_key": pressed_key,
-                    "participant_response": selected_colour,
                     "correct": selected_colour == trial["ink"],
                     "reaction_ms": round(reaction_ms, 2),
-                    "reaction_time_ms": round(reaction_ms, 2),
-                    "timeout": False,
                     "miss": False,
-                    "timestamp": _utc_timestamp(),
                 }
             )
             st.session_state.stroop_index += 1
@@ -1183,21 +1037,11 @@ def render_stroop() -> None:
             st.session_state.stroop_responses.append(
                 {
                     **trial,
-                    "trial_number": index + 1,
-                    "congruent_or_incongruent": (
-                        "congruent" if trial["congruent"] else "incongruent"
-                    ),
-                    "ink_colour": trial["ink"],
-                    "correct_response": trial["ink"],
                     "response": None,
                     "response_key": None,
-                    "participant_response": None,
                     "correct": False,
                     "reaction_ms": None,
-                    "reaction_time_ms": None,
-                    "timeout": True,
                     "miss": True,
-                    "timestamp": _utc_timestamp(),
                 }
             )
             time.sleep(STROOP_ITI)
@@ -1216,51 +1060,14 @@ def render_stroop() -> None:
         accuracy = float(np.mean([item["correct"] for item in responses]) * 100)
         reaction_times = [item["reaction_ms"] for item in responses if item["correct"]]
         mean_reaction = float(np.mean(reaction_times)) if reaction_times else 0.0
-        median_reaction = float(np.median(reaction_times)) if reaction_times else 0.0
-        sd_reaction = float(np.std(reaction_times, ddof=1)) if len(reaction_times) > 1 else 0.0
-        congruent = [item for item in responses if item["congruent"]]
-        incongruent = [item for item in responses if not item["congruent"]]
-        congruent_correct_rt = [
-            item["reaction_ms"] for item in congruent
-            if item["correct"] and item["reaction_ms"] is not None
-        ]
-        incongruent_correct_rt = [
-            item["reaction_ms"] for item in incongruent
-            if item["correct"] and item["reaction_ms"] is not None
-        ]
-        congruent_accuracy = (
-            float(np.mean([item["correct"] for item in congruent]) * 100)
-            if congruent else 0.0
-        )
-        incongruent_accuracy = (
-            float(np.mean([item["correct"] for item in incongruent]) * 100)
-            if incongruent else 0.0
-        )
-        congruent_mean_rt = (
-            float(np.mean(congruent_correct_rt)) if congruent_correct_rt else 0.0
-        )
-        incongruent_mean_rt = (
-            float(np.mean(incongruent_correct_rt)) if incongruent_correct_rt else 0.0
-        )
         misses = sum(1 for item in responses if item.get("miss"))
         errors = sum(1 for item in responses if not item["correct"] and not item.get("miss"))
         st.session_state.cognitive_result = {
             "task_type": "stroop",
             "accuracy": accuracy,
             "mean_reaction_ms": mean_reaction,
-            "overall_accuracy": accuracy,
-            "overall_mean_RT": mean_reaction,
-            "overall_median_RT": median_reaction,
-            "overall_SD_RT": sd_reaction,
-            "congruent_accuracy": congruent_accuracy,
-            "incongruent_accuracy": incongruent_accuracy,
-            "congruent_mean_RT": congruent_mean_rt,
-            "incongruent_mean_RT": incongruent_mean_rt,
-            "stroop_interference_effect": incongruent_mean_rt - congruent_mean_rt,
             "errors": errors,
-            "number_of_errors": errors,
             "misses": misses,
-            "number_of_missed_trials": misses,
             "false_alarms": 0,
             "trials": responses,
         }
@@ -1295,7 +1102,6 @@ def render_review(participant_id: str) -> None:
                 _assessment_answers_for_storage(answers),
                 _time_tasks_for_storage(st.session_state.time_task_results),
                 st.session_state.cognitive_result,
-                _assessment_metadata_for_storage(),
             )
         st.session_state.last_assessment_id = assessment_id
         st.session_state.assessment_active = False
