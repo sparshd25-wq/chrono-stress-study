@@ -145,130 +145,189 @@ PULSE_RATE_MATCH_COMPONENT = components_v2.component(
     "pulse_rate_hold_dial",
     html="""
         <div class="pulse-hold-match">
-            <div class="preview-wrap" aria-hidden="true">
+            <div class="pulse-preview" aria-hidden="true">
                 <div class="preview-pulse"></div>
             </div>
-            <div class="pulse-rate-readout" aria-live="polite">
-                Current pulse:<br><strong>0.4 pulses/sec</strong>
+            
+            <div class="pulse-readout" aria-live="polite" aria-atomic="true">
+                <span class="readout-label">Pulse:</span><br><strong class="readout-value">0.4</strong>
             </div>
 
-            <div class="dial-row">
-                <span>SLOWER</span>
-                <button type="button" class="hold-dial" aria-label="Hold to match pulse rhythm">
+            <div class="pulse-controls">
+                <button type="button" class="adjust-btn slower-btn" aria-label="Decrease pulse rate">−</button>
+                <button type="button" class="hold-dial" aria-label="Hold to adjust pulse rhythm">
                     <span class="dial-core"></span>
                 </button>
-                <span>FASTER</span>
+                <button type="button" class="adjust-btn faster-btn" aria-label="Increase pulse rate">+</button>
             </div>
         </div>
     """,
     css="""
         :host {
-            display:block;
+            display: block;
+            padding: 0;
+            margin: 0;
         }
         .pulse-hold-match {
-            align-items:center;
-            color:#152238;
-            display:flex;
-            flex-direction:column;
-            gap:24px;
-            justify-content:center;
-            padding:18px 8px 28px;
+            align-items: center;
+            color: #152238;
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            justify-content: flex-start;
+            padding: 12px 8px;
+            width: 100%;
+            box-sizing: border-box;
         }
-        .preview-wrap {
-            align-items:center;
-            display:flex;
-            height:170px;
-            justify-content:center;
-            width:100%;
+        .pulse-preview {
+            align-items: center;
+            display: flex;
+            height: 100px;
+            justify-content: center;
+            width: 100%;
+            min-height: 100px;
         }
         .preview-pulse {
             animation: preview-pulse var(--pulse-duration, 2.5s) ease-in-out infinite;
-            background:#1976d2;
-            border-radius:50%;
-            box-shadow:0 0 0 12px rgba(25,118,210,.08),
-                       0 16px 32px rgba(25,118,210,.18);
-            height:118px;
-            opacity:.82;
-            transform:scale(.90);
-            width:118px;
+            background: #1976d2;
+            border-radius: 50%;
+            box-shadow: 0 0 0 8px rgba(25, 118, 210, .08);
+            height: 80px;
+            width: 80px;
+            opacity: 0.82;
         }
-        .pulse-rate-readout {
-            background:#eaf2f8;
-            border:1px solid #cfe0ef;
-            border-radius:8px;
-            color:#152238;
-            font:700 15px/1.35 Inter, Arial, sans-serif;
-            min-height:56px;
-            padding:8px 14px;
-            text-align:center;
-            width:min(100%, 240px);
+        .pulse-readout {
+            background: #eaf2f8;
+            border: 1px solid #cfe0ef;
+            border-radius: 6px;
+            color: #152238;
+            font: 600 13px/1.3 Inter, Arial, sans-serif;
+            padding: 6px 12px;
+            text-align: center;
+            width: 100%;
+            box-sizing: border-box;
+            min-height: 40px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
         }
-        .pulse-rate-readout strong {
-            font-size:18px;
+        .readout-label {
+            font-size: 11px;
+            color: #587084;
+            font-weight: 600;
         }
-        .dial-row {
-            align-items:center;
-            display:grid;
-            gap:18px;
-            grid-template-columns:minmax(76px, 1fr) auto minmax(76px, 1fr);
-            max-width:520px;
-            width:100%;
+        .readout-value {
+            font-size: 20px;
+            color: #1769aa;
+            font-weight: 700;
+            margin-top: 2px;
         }
-        .dial-row span {
-            color:#587084;
-            font:700 13px/1 Inter, Arial, sans-serif;
-            letter-spacing:.12em;
-            text-align:center;
+        .pulse-controls {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 10px;
+            width: 100%;
+            max-width: 280px;
+        }
+        .adjust-btn {
+            background: #1976d2;
+            border: 0;
+            border-radius: 6px;
+            color: white;
+            cursor: pointer;
+            font: 700 16px Inter, Arial, sans-serif;
+            height: 44px;
+            width: 44px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            touch-action: manipulation;
+            user-select: none;
+            -webkit-tap-highlight-color: transparent;
+            transition: all 0.15s ease;
+            padding: 0;
+            flex-shrink: 0;
+        }
+        .adjust-btn:active {
+            background: #125a9f;
+            transform: scale(0.95);
+        }
+        .adjust-btn:focus-visible {
+            outline: 2px solid rgba(25, 118, 210, 0.5);
+            outline-offset: 2px;
         }
         .hold-dial {
-            --fill:0deg;
-            align-items:center;
-            background:conic-gradient(#1976d2 var(--fill), #d8e5ef 0deg);
-            border:0;
-            border-radius:50%;
-            box-shadow:0 12px 30px rgba(21,34,56,.16);
-            cursor:pointer;
-            display:flex;
-            height:148px;
-            justify-content:center;
-            padding:12px;
-            touch-action:none;
-            user-select:none;
-            width:148px;
-            -webkit-tap-highlight-color:transparent;
+            background: linear-gradient(135deg, #1976d2 0%, #125a9f 100%);
+            border: 0;
+            border-radius: 50%;
+            box-shadow: 0 4px 12px rgba(21, 34, 56, .15);
+            cursor: grab;
+            cursor: -webkit-grab;
+            display: flex;
+            height: 100px;
+            width: 100px;
+            align-items: center;
+            justify-content: center;
+            padding: 8px;
+            touch-action: none;
+            user-select: none;
+            -webkit-tap-highlight-color: transparent;
+            transition: all 0.15s ease;
+            flex-shrink: 0;
+        }
+        .hold-dial:active {
+            cursor: grabbing;
+            cursor: -webkit-grabbing;
         }
         .hold-dial:focus-visible {
-            outline:3px solid rgba(25,118,210,.35);
-            outline-offset:4px;
+            outline: 2px solid rgba(25, 118, 210, 0.6);
+            outline-offset: 3px;
         }
         .hold-dial.holding {
-            box-shadow:0 0 0 10px rgba(25,118,210,.08),
-                       0 18px 36px rgba(21,34,56,.20);
+            box-shadow: 0 0 0 8px rgba(25, 118, 210, .12),
+                        0 8px 20px rgba(21, 34, 56, .20);
+            transform: scale(1.05);
         }
         .dial-core {
-            background:#ffffff;
-            border-radius:50%;
-            box-shadow:inset 0 0 0 1px rgba(88,112,132,.16);
-            display:block;
-            height:100%;
-            width:100%;
+            background: #ffffff;
+            border-radius: 50%;
+            box-shadow: inset 0 0 0 1px rgba(88, 112, 132, .16);
+            display: block;
+            height: 100%;
+            width: 100%;
         }
         @keyframes preview-pulse {
-            0%, 100% { transform:scale(.90); opacity:.78; }
-            50% { transform:scale(1.15); opacity:1; }
+            0%, 100% { transform: scale(0.85); opacity: 0.72; }
+            50% { transform: scale(1.0); opacity: 1; }
         }
-        @media (max-width: 560px) {
-            .dial-row {
-                gap:10px;
-                grid-template-columns:minmax(58px, 1fr) auto minmax(58px, 1fr);
+        @media (max-width: 400px) {
+            .pulse-hold-match {
+                gap: 6px;
+                padding: 10px 6px;
             }
-            .dial-row span {
-                font-size:11px;
-                letter-spacing:.08em;
+            .pulse-preview {
+                height: 90px;
+            }
+            .preview-pulse {
+                height: 70px;
+                width: 70px;
+            }
+            .pulse-controls {
+                gap: 8px;
+            }
+            .adjust-btn {
+                height: 40px;
+                width: 40px;
+                font-size: 14px;
             }
             .hold-dial {
-                height:126px;
-                width:126px;
+                height: 90px;
+                width: 90px;
+            }
+            .readout-value {
+                font-size: 18px;
             }
         }
     """,
@@ -276,82 +335,185 @@ PULSE_RATE_MATCH_COMPONENT = components_v2.component(
         export default function(component) {
             const { parentElement, setTriggerValue } = component;
             const dial = parentElement.querySelector('.hold-dial');
+            const slowerBtn = parentElement.querySelector('.slower-btn');
+            const fasterBtn = parentElement.querySelector('.faster-btn');
             const preview = parentElement.querySelector('.preview-pulse');
-            const readout = parentElement.querySelector('.pulse-rate-readout strong');
+            const readoutValue = parentElement.querySelector('.readout-value');
+            
             const minRate = 0.4;
             const maxRate = 3.0;
-            const maxHoldMs = 12000;
-            let startedAt = null;
-            let animationFrame = null;
+            const tapIncrement = 0.02;
+            const holdInitialDelay = 250;
+            const holdAccelDelay = 150;
+            const maxHoldAccel = 0.08;
+            
             let currentRate = minRate;
-
-            const rateFromProgress = (progress) => {
-                const eased = Math.pow(progress, 1.8);
-                return minRate + (maxRate - minRate) * eased;
+            let holdStartTime = null;
+            let holdAnimFrame = null;
+            let lastAccelChange = 0;
+            let holdAcceleration = 0;
+            
+            // Update pulse animation and readout display.
+            const updateDisplay = (rate) => {
+                const clamped = Math.max(minRate, Math.min(maxRate, rate));
+                currentRate = clamped;
+                preview.style.setProperty('--pulse-duration', `${(1 / clamped).toFixed(3)}s`);
+                readoutValue.textContent = clamped.toFixed(2);
             };
-
-            const updatePreview = (rate) => {
-                preview.style.setProperty('--pulse-duration', `${(1 / rate).toFixed(3)}s`);
-                readout.textContent = `${rate.toFixed(1)} pulses/sec`;
+            
+            // Handle tap increment: ±0.02 pulses/sec.
+            const tapAdjust = (delta) => {
+                const newRate = currentRate + delta;
+                updateDisplay(newRate);
+                setTriggerValue('matched_rate', Number(currentRate.toFixed(4)));
             };
-
-            const render = () => {
-                const elapsed = performance.now() - startedAt;
-                const progress = Math.min(1, elapsed / maxHoldMs);
-                currentRate = rateFromProgress(progress);
-                dial.style.setProperty('--fill', `${progress * 360}deg`);
-                updatePreview(currentRate);
-                animationFrame = requestAnimationFrame(render);
+            
+            // Hold-to-adjust animation loop.
+            const holdLoop = () => {
+                const elapsed = performance.now() - holdStartTime;
+                let rateChange = 0;
+                
+                if (elapsed >= holdInitialDelay) {
+                    // After delay, begin smooth acceleration.
+                    const accelElapsed = elapsed - holdInitialDelay;
+                    const accelProgress = Math.min(1, accelElapsed / 2000);
+                    holdAcceleration = Math.pow(accelProgress, 0.8) * maxHoldAccel;
+                    rateChange = holdAcceleration;
+                }
+                
+                const delta = rateChange * 0.016;
+                const newRate = currentRate + delta;
+                updateDisplay(newRate);
+                holdAnimFrame = requestAnimationFrame(holdLoop);
             };
-
-            const begin = (event) => {
+            
+            // Begin slower (decrease rate).
+            const beginSlower = () => {
+                if (holdStartTime !== null) return;
+                holdStartTime = performance.now();
+                dial.classList.add('holding');
+                holdAcceleration = 0;
+                holdAnimFrame = requestAnimationFrame(holdLoop);
+                // Tap immediately on first frame.
+                setTimeout(() => {
+                    if (holdStartTime !== null) {
+                        const elapsed = performance.now() - holdStartTime;
+                        if (elapsed < 50) {
+                            updateDisplay(currentRate - tapIncrement);
+                        }
+                    }
+                }, 0);
+            };
+            
+            // Begin faster (increase rate).
+            const beginFaster = () => {
+                if (holdStartTime !== null) return;
+                holdStartTime = performance.now();
+                dial.classList.add('holding');
+                holdAcceleration = 0;
+                holdAnimFrame = requestAnimationFrame(holdLoop);
+                // Tap immediately on first frame.
+                setTimeout(() => {
+                    if (holdStartTime !== null) {
+                        const elapsed = performance.now() - holdStartTime;
+                        if (elapsed < 50) {
+                            updateDisplay(currentRate + tapIncrement);
+                        }
+                    }
+                }, 0);
+            };
+            
+            // Begin hold on dial (bidirectional).
+            const beginHold = (event) => {
                 event.preventDefault();
-                if (startedAt !== null) return;
-                startedAt = performance.now();
+                if (holdStartTime !== null) return;
+                holdStartTime = performance.now();
                 dial.classList.add('holding');
                 if (event.pointerId !== undefined) {
                     dial.setPointerCapture(event.pointerId);
                 }
-                render();
+                holdAcceleration = 0;
+                holdAnimFrame = requestAnimationFrame(holdLoop);
             };
-
-            const finish = (event) => {
-                event.preventDefault();
-                if (startedAt === null) return;
-                cancelAnimationFrame(animationFrame);
-                animationFrame = null;
-                startedAt = null;
+            
+            // Finish hold (any button).
+            const finishHold = (event) => {
+                event?.preventDefault?.();
+                if (holdStartTime === null) return;
+                if (holdAnimFrame !== null) {
+                    cancelAnimationFrame(holdAnimFrame);
+                }
+                holdAnimFrame = null;
+                holdStartTime = null;
                 dial.classList.remove('holding');
                 setTriggerValue('matched_rate', Number(currentRate.toFixed(4)));
             };
-
-            const cancel = () => {
-                if (animationFrame !== null) {
-                    cancelAnimationFrame(animationFrame);
+            
+            // Cancel hold (pointer leaving while holding).
+            const cancelHold = () => {
+                if (holdAnimFrame !== null) {
+                    cancelAnimationFrame(holdAnimFrame);
                 }
-                animationFrame = null;
-                startedAt = null;
+                holdAnimFrame = null;
+                holdStartTime = null;
                 dial.classList.remove('holding');
             };
-
-            updatePreview(minRate);
-            dial.addEventListener('pointerdown', begin);
-            dial.addEventListener('pointerup', finish);
-            dial.addEventListener('pointercancel', cancel);
+            
+            // Initialize display.
+            updateDisplay(minRate);
+            
+            // Slower button listeners.
+            slowerBtn.addEventListener('pointerdown', beginSlower);
+            slowerBtn.addEventListener('pointerup', finishHold);
+            slowerBtn.addEventListener('pointercancel', cancelHold);
+            slowerBtn.addEventListener('pointerleave', (event) => {
+                if (holdStartTime !== null && event.buttons === 0) cancelHold();
+            });
+            
+            // Faster button listeners.
+            fasterBtn.addEventListener('pointerdown', beginFaster);
+            fasterBtn.addEventListener('pointerup', finishHold);
+            fasterBtn.addEventListener('pointercancel', cancelHold);
+            fasterBtn.addEventListener('pointerleave', (event) => {
+                if (holdStartTime !== null && event.buttons === 0) cancelHold();
+            });
+            
+            // Dial listeners (for keyboard).
+            dial.addEventListener('pointerdown', beginHold);
+            dial.addEventListener('pointerup', finishHold);
+            dial.addEventListener('pointercancel', cancelHold);
             dial.addEventListener('pointerleave', (event) => {
-                if (startedAt !== null && event.buttons === 0) cancel();
+                if (holdStartTime !== null && event.buttons === 0) cancelHold();
             });
             dial.addEventListener('contextmenu', (event) => event.preventDefault());
             dial.addEventListener('keydown', (event) => {
-                if ((event.key === ' ' || event.key === 'Enter') && !event.repeat) begin(event);
+                if ((event.key === ' ' || event.key === 'Enter') && !event.repeat) {
+                    beginHold(event);
+                }
+                if (event.key === 'ArrowLeft') {
+                    event.preventDefault();
+                    tapAdjust(-tapIncrement);
+                }
+                if (event.key === 'ArrowRight') {
+                    event.preventDefault();
+                    tapAdjust(tapIncrement);
+                }
             });
             dial.addEventListener('keyup', (event) => {
-                if (event.key === ' ' || event.key === 'Enter') finish(event);
+                if (event.key === ' ' || event.key === 'Enter') {
+                    finishHold(event);
+                }
             });
-
+            
+            // Cleanup on unmount.
             return () => {
-                cancel();
-                dial.replaceWith(dial.cloneNode(true));
+                cancelHold();
+                slowerBtn?.removeEventListener?.('pointerdown', beginSlower);
+                slowerBtn?.removeEventListener?.('pointerup', finishHold);
+                fasterBtn?.removeEventListener?.('pointerdown', beginFaster);
+                fasterBtn?.removeEventListener?.('pointerup', finishHold);
+                dial?.removeEventListener?.('pointerdown', beginHold);
+                dial?.removeEventListener?.('pointerup', finishHold);
             };
         }
     """,
@@ -1013,14 +1175,13 @@ def render_estimation() -> None:
     if phase == "respond":
         st.markdown("### Pulse rhythm matching")
         st.write(
-            "Recreate the pulse rhythm you just observed.\n\n"
-            "Press and hold the circular control until the pulse below feels like "
-            "the same rhythm you experienced previously.\n\n"
-            "Release when it feels like a match."
+            "Recreate the pulse rhythm you just observed by adjusting the pulse below. "
+            "Tap the **±** buttons for fine adjustments or hold them for continuous change. "
+            "Release when it matches the rhythm you saw."
         )
         match_result = PULSE_RATE_MATCH_COMPONENT(
             key="pulse_rate_match",
-            height=360,
+            height=280,
             on_matched_rate_change=lambda: None,
         )
         matched_rate = getattr(match_result, "matched_rate", None)
@@ -1332,3 +1493,4 @@ def render_assessment(participant_id: str) -> None:
         render_review(participant_id)
     else:
         renderers[step]()
+
