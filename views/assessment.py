@@ -142,7 +142,7 @@ HOLD_REPRODUCTION_COMPONENT = components_v2.component(
 
 
 PULSE_RATE_MATCH_COMPONENT = components_v2.component(
-    "pulse_rate_match_v2_incremental",
+    "pulse_rate_match_v3_hold_only",
     html="""
         <div class="pulse-hold-match">
             <div class="pulse-preview" aria-hidden="true">
@@ -150,15 +150,13 @@ PULSE_RATE_MATCH_COMPONENT = components_v2.component(
             </div>
             
             <div class="pulse-readout" aria-live="polite" aria-atomic="true">
-                <span class="readout-label">Pulse:</span><br><strong class="readout-value">0.4</strong>
+                <span class="readout-label">Pulse:</span><br><strong class="readout-value">0.40 pulses/second</strong>
             </div>
 
             <div class="pulse-controls">
-                <button type="button" class="adjust-btn slower-btn" aria-label="Decrease pulse rate">−</button>
                 <button type="button" class="hold-dial" aria-label="Hold to adjust pulse rhythm">
                     <span class="dial-core"></span>
                 </button>
-                <button type="button" class="adjust-btn faster-btn" aria-label="Increase pulse rate">+</button>
             </div>
         </div>
     """,
@@ -218,7 +216,7 @@ PULSE_RATE_MATCH_COMPONENT = components_v2.component(
             font-weight: 600;
         }
         .readout-value {
-            font-size: 20px;
+            font-size: 16px;
             color: #1769aa;
             font-weight: 700;
             margin-top: 2px;
@@ -230,33 +228,6 @@ PULSE_RATE_MATCH_COMPONENT = components_v2.component(
             gap: 10px;
             width: 100%;
             max-width: 280px;
-        }
-        .adjust-btn {
-            background: #1976d2;
-            border: 0;
-            border-radius: 6px;
-            color: white;
-            cursor: pointer;
-            font: 700 16px Inter, Arial, sans-serif;
-            height: 44px;
-            width: 44px;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            touch-action: manipulation;
-            user-select: none;
-            -webkit-tap-highlight-color: transparent;
-            transition: all 0.15s ease;
-            padding: 0;
-            flex-shrink: 0;
-        }
-        .adjust-btn:active {
-            background: #125a9f;
-            transform: scale(0.95);
-        }
-        .adjust-btn:focus-visible {
-            outline: 2px solid rgba(25, 118, 210, 0.5);
-            outline-offset: 2px;
         }
         .hold-dial {
             background: linear-gradient(135deg, #1976d2 0%, #125a9f 100%);
@@ -314,20 +285,12 @@ PULSE_RATE_MATCH_COMPONENT = components_v2.component(
                 height: 70px;
                 width: 70px;
             }
-            .pulse-controls {
-                gap: 8px;
-            }
-            .adjust-btn {
-                height: 40px;
-                width: 40px;
-                font-size: 14px;
-            }
             .hold-dial {
                 height: 90px;
                 width: 90px;
             }
             .readout-value {
-                font-size: 18px;
+                font-size: 14px;
             }
         }
     """,
@@ -335,95 +298,40 @@ PULSE_RATE_MATCH_COMPONENT = components_v2.component(
         export default function(component) {
             const { parentElement, setTriggerValue } = component;
             const dial = parentElement.querySelector('.hold-dial');
-            const slowerBtn = parentElement.querySelector('.slower-btn');
-            const fasterBtn = parentElement.querySelector('.faster-btn');
             const preview = parentElement.querySelector('.preview-pulse');
             const readoutValue = parentElement.querySelector('.readout-value');
             
             const minRate = 0.4;
             const maxRate = 3.0;
-            const tapIncrement = 0.02;
-            const holdInitialDelay = 250;
-            const holdAccelDelay = 150;
-            const maxHoldAccel = 0.08;
+            const maxHoldMs = 25000;
             
             let currentRate = minRate;
             let holdStartTime = null;
             let holdAnimFrame = null;
-            let lastAccelChange = 0;
-            let holdAcceleration = 0;
             
-            // Update pulse animation and readout display.
+            // Update pulse animation and readout display with units.
             const updateDisplay = (rate) => {
                 const clamped = Math.max(minRate, Math.min(maxRate, rate));
                 currentRate = clamped;
                 preview.style.setProperty('--pulse-duration', `${(1 / clamped).toFixed(3)}s`);
-                readoutValue.textContent = clamped.toFixed(2);
+                readoutValue.textContent = clamped.toFixed(2) + ' pulses/second';
             };
             
-            // Handle tap increment: ±0.02 pulses/sec.
-            const tapAdjust = (delta) => {
-                const newRate = currentRate + delta;
-                updateDisplay(newRate);
-                setTriggerValue('matched_rate', Number(currentRate.toFixed(4)));
-            };
-            
-            // Hold-to-adjust animation loop.
+            // Hold-to-adjust animation loop with much gentler ramp.
             const holdLoop = () => {
                 const elapsed = performance.now() - holdStartTime;
-                let rateChange = 0;
+                const progress = Math.min(1, elapsed / maxHoldMs);
                 
-                if (elapsed >= holdInitialDelay) {
-                    // After delay, begin smooth acceleration.
-                    const accelElapsed = elapsed - holdInitialDelay;
-                    const accelProgress = Math.min(1, accelElapsed / 2000);
-                    holdAcceleration = Math.pow(accelProgress, 0.8) * maxHoldAccel;
-                    rateChange = holdAcceleration;
-                }
+                // Very gentle easing curve for smooth, controlled adjustment.
+                // Uses sqrt for gradual acceleration from zero.
+                const gentleEasing = Math.sqrt(progress);
+                currentRate = minRate + (maxRate - minRate) * gentleEasing;
                 
-                const delta = rateChange * 0.016;
-                const newRate = currentRate + delta;
-                updateDisplay(newRate);
+                updateDisplay(currentRate);
                 holdAnimFrame = requestAnimationFrame(holdLoop);
             };
             
-            // Begin slower (decrease rate).
-            const beginSlower = () => {
-                if (holdStartTime !== null) return;
-                holdStartTime = performance.now();
-                dial.classList.add('holding');
-                holdAcceleration = 0;
-                holdAnimFrame = requestAnimationFrame(holdLoop);
-                // Tap immediately on first frame.
-                setTimeout(() => {
-                    if (holdStartTime !== null) {
-                        const elapsed = performance.now() - holdStartTime;
-                        if (elapsed < 50) {
-                            updateDisplay(currentRate - tapIncrement);
-                        }
-                    }
-                }, 0);
-            };
-            
-            // Begin faster (increase rate).
-            const beginFaster = () => {
-                if (holdStartTime !== null) return;
-                holdStartTime = performance.now();
-                dial.classList.add('holding');
-                holdAcceleration = 0;
-                holdAnimFrame = requestAnimationFrame(holdLoop);
-                // Tap immediately on first frame.
-                setTimeout(() => {
-                    if (holdStartTime !== null) {
-                        const elapsed = performance.now() - holdStartTime;
-                        if (elapsed < 50) {
-                            updateDisplay(currentRate + tapIncrement);
-                        }
-                    }
-                }, 0);
-            };
-            
-            // Begin hold on dial (bidirectional).
+            // Begin hold on dial (no separate +/- buttons).
             const beginHold = (event) => {
                 event.preventDefault();
                 if (holdStartTime !== null) return;
@@ -432,11 +340,10 @@ PULSE_RATE_MATCH_COMPONENT = components_v2.component(
                 if (event.pointerId !== undefined) {
                     dial.setPointerCapture(event.pointerId);
                 }
-                holdAcceleration = 0;
                 holdAnimFrame = requestAnimationFrame(holdLoop);
             };
             
-            // Finish hold (any button).
+            // Finish hold.
             const finishHold = (event) => {
                 event?.preventDefault?.();
                 if (holdStartTime === null) return;
@@ -462,23 +369,7 @@ PULSE_RATE_MATCH_COMPONENT = components_v2.component(
             // Initialize display.
             updateDisplay(minRate);
             
-            // Slower button listeners.
-            slowerBtn.addEventListener('pointerdown', beginSlower);
-            slowerBtn.addEventListener('pointerup', finishHold);
-            slowerBtn.addEventListener('pointercancel', cancelHold);
-            slowerBtn.addEventListener('pointerleave', (event) => {
-                if (holdStartTime !== null && event.buttons === 0) cancelHold();
-            });
-            
-            // Faster button listeners.
-            fasterBtn.addEventListener('pointerdown', beginFaster);
-            fasterBtn.addEventListener('pointerup', finishHold);
-            fasterBtn.addEventListener('pointercancel', cancelHold);
-            fasterBtn.addEventListener('pointerleave', (event) => {
-                if (holdStartTime !== null && event.buttons === 0) cancelHold();
-            });
-            
-            // Dial listeners (for keyboard).
+            // Dial listeners (single-button interaction).
             dial.addEventListener('pointerdown', beginHold);
             dial.addEventListener('pointerup', finishHold);
             dial.addEventListener('pointercancel', cancelHold);
@@ -490,14 +381,6 @@ PULSE_RATE_MATCH_COMPONENT = components_v2.component(
                 if ((event.key === ' ' || event.key === 'Enter') && !event.repeat) {
                     beginHold(event);
                 }
-                if (event.key === 'ArrowLeft') {
-                    event.preventDefault();
-                    tapAdjust(-tapIncrement);
-                }
-                if (event.key === 'ArrowRight') {
-                    event.preventDefault();
-                    tapAdjust(tapIncrement);
-                }
             });
             dial.addEventListener('keyup', (event) => {
                 if (event.key === ' ' || event.key === 'Enter') {
@@ -508,10 +391,6 @@ PULSE_RATE_MATCH_COMPONENT = components_v2.component(
             // Cleanup on unmount.
             return () => {
                 cancelHold();
-                slowerBtn?.removeEventListener?.('pointerdown', beginSlower);
-                slowerBtn?.removeEventListener?.('pointerup', finishHold);
-                fasterBtn?.removeEventListener?.('pointerdown', beginFaster);
-                fasterBtn?.removeEventListener?.('pointerup', finishHold);
                 dial?.removeEventListener?.('pointerdown', beginHold);
                 dial?.removeEventListener?.('pointerup', finishHold);
             };
@@ -1175,9 +1054,8 @@ def render_estimation() -> None:
     if phase == "respond":
         st.markdown("### Pulse rhythm matching")
         st.write(
-            "Recreate the pulse rhythm you just observed by adjusting the pulse below. "
-            "Tap the **±** buttons for fine adjustments or hold them for continuous change. "
-            "Release when it matches the rhythm you saw."
+            "Recreate the pulse rhythm you just observed. "
+            "Hold the circular controller and release when the pulse matches the rhythm you saw."
         )
         match_result = PULSE_RATE_MATCH_COMPONENT(
             key="pulse_rate_match",
