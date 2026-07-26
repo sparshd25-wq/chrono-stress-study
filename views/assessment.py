@@ -142,7 +142,7 @@ HOLD_REPRODUCTION_COMPONENT = components_v2.component(
 
 
 PULSE_RATE_MATCH_COMPONENT = components_v2.component(
-    "pulse_rate_hold_dial",
+    "pulse_rate_match_v2_incremental",
     html="""
         <div class="pulse-hold-match">
             <div class="pulse-preview" aria-hidden="true">
