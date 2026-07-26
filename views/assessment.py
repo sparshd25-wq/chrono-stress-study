@@ -142,7 +142,7 @@ HOLD_REPRODUCTION_COMPONENT = components_v2.component(
 
 
 PULSE_RATE_MATCH_COMPONENT = components_v2.component(
-    "pulse_rate_match_v3_hold_only",
+    "pulse_rate_match_v4_linear",
     html="""
         <div class="pulse-hold-match">
             <div class="pulse-preview" aria-hidden="true">
@@ -150,7 +150,7 @@ PULSE_RATE_MATCH_COMPONENT = components_v2.component(
             </div>
             
             <div class="pulse-readout" aria-live="polite" aria-atomic="true">
-                <span class="readout-label">Pulse:</span><br><strong class="readout-value">0.40 pulses/second</strong>
+                <span class="readout-label">Pulse:</span><br><strong class="readout-value">0.10 pulses/second</strong>
             </div>
 
             <div class="pulse-controls">
@@ -186,7 +186,7 @@ PULSE_RATE_MATCH_COMPONENT = components_v2.component(
             min-height: 100px;
         }
         .preview-pulse {
-            animation: preview-pulse var(--pulse-duration, 2.5s) ease-in-out infinite;
+            animation: preview-pulse var(--pulse-duration, 10s) ease-in-out infinite;
             background: #1976d2;
             border-radius: 50%;
             box-shadow: 0 0 0 8px rgba(25, 118, 210, .08);
@@ -301,9 +301,9 @@ PULSE_RATE_MATCH_COMPONENT = components_v2.component(
             const preview = parentElement.querySelector('.preview-pulse');
             const readoutValue = parentElement.querySelector('.readout-value');
             
-            const minRate = 0.4;
+            const minRate = 0.10;
             const maxRate = 3.0;
-            const maxHoldMs = 25000;
+            const linearIncrementPerSecond = 0.20;
             
             let currentRate = minRate;
             let holdStartTime = null;
@@ -317,21 +317,19 @@ PULSE_RATE_MATCH_COMPONENT = components_v2.component(
                 readoutValue.textContent = clamped.toFixed(2) + ' pulses/second';
             };
             
-            // Hold-to-adjust animation loop with much gentler ramp.
+            // Hold-to-adjust animation loop with constant linear increase.
             const holdLoop = () => {
-                const elapsed = performance.now() - holdStartTime;
-                const progress = Math.min(1, elapsed / maxHoldMs);
+                const elapsedMs = performance.now() - holdStartTime;
+                const elapsedSeconds = elapsedMs / 1000;
                 
-                // Very gentle easing curve for smooth, controlled adjustment.
-                // Uses sqrt for gradual acceleration from zero.
-                const gentleEasing = Math.sqrt(progress);
-                currentRate = minRate + (maxRate - minRate) * gentleEasing;
+                // Linear increase: constant rate per second with no acceleration.
+                currentRate = minRate + (elapsedSeconds * linearIncrementPerSecond);
                 
                 updateDisplay(currentRate);
                 holdAnimFrame = requestAnimationFrame(holdLoop);
             };
             
-            // Begin hold on dial (no separate +/- buttons).
+            // Begin hold on dial (single button, linear adjustment).
             const beginHold = (event) => {
                 event.preventDefault();
                 if (holdStartTime !== null) return;
@@ -781,10 +779,11 @@ def _assessment_metadata_for_storage() -> dict[str, Any]:
 
 def _pulse_hold_seconds_from_rate(rate: float) -> float:
     """Recover approximate hold duration from the pulse matching easing curve."""
-    min_rate = 0.4
+    min_rate = 0.1
     max_rate = 3.0
-    progress = ((rate - min_rate) / (max_rate - min_rate)) ** (1 / 1.8)
-    return max(0.0, min(12.0, progress * 12.0))
+    linear_rate = 0.20
+    hold_seconds = (rate - min_rate) / linear_rate
+    return max(0.0, min(14.5, hold_seconds))
 
 
 def _append_time_task(result: dict[str, Any], metadata: dict[str, Any]) -> None:
