@@ -36,6 +36,45 @@ def format_india_datetime(value: object) -> str:
     return parsed.tz_convert(INDIA_TZ).strftime("%Y-%m-%d %H:%M:%S IST")
 
 
+def _india_timestamp_series(values: pd.Series) -> pd.Series:
+    return pd.to_datetime(values, errors="coerce", utc=True).dt.tz_convert(INDIA_TZ)
+
+
+def _force_export_timestamps_to_ist(datasets: dict[str, pd.DataFrame]) -> dict[str, pd.DataFrame]:
+    """Force the final downloaded export tables to show Indian local time."""
+    converted = {name: frame.copy() for name, frame in datasets.items()}
+
+    daily = converted.get("Daily Assessments")
+    if daily is not None and not daily.empty and "assessment_datetime" in daily:
+        already_ist = daily["assessment_datetime"].astype(str).str.endswith(" IST")
+        local_times = _india_timestamp_series(daily["assessment_datetime"].where(~already_ist))
+        valid = local_times.notna()
+        daily.loc[valid, "assessment_datetime"] = local_times.loc[valid].dt.strftime(
+            "%Y-%m-%d %H:%M:%S IST"
+        )
+        if "assessment_date" in daily:
+            daily.loc[valid, "assessment_date"] = local_times.loc[valid].dt.strftime(
+                "%d-%m-%Y"
+            )
+        if "assessment_time" in daily:
+            daily.loc[valid, "assessment_time"] = local_times.loc[valid].dt.strftime(
+                "%H:%M:%S"
+            )
+
+    for name in ("Stroop Trials", "Raw Events"):
+        frame = converted.get(name)
+        if frame is None or frame.empty or "timestamp" not in frame:
+            continue
+        already_ist = frame["timestamp"].astype(str).str.endswith(" IST")
+        local_times = _india_timestamp_series(frame["timestamp"].where(~already_ist))
+        valid = local_times.notna()
+        frame.loc[valid, "timestamp"] = local_times.loc[valid].dt.strftime(
+            "%Y-%m-%d %H:%M:%S IST"
+        )
+
+    return converted
+
+
 def _latest_value(latest: dict, key: str, suffix: str = "", fallback: str = "--") -> str:
     value = latest.get(key)
     return f"{value:g}{suffix}" if pd.notna(value) and value is not None else fallback
@@ -259,7 +298,9 @@ def render_export() -> None:
     st.write(
         "Download the admin-only longitudinal repeated-measures dataset for the full study."
     )
-    datasets = research_datasets(all_study_frames(), readable_exports=True)
+    datasets = _force_export_timestamps_to_ist(
+        research_datasets(all_study_frames(), readable_exports=True)
+    )
     participants = datasets["Participants"]
     daily = datasets["Daily Assessments"]
     stroop = datasets["Stroop Trials"]
