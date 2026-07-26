@@ -142,7 +142,7 @@ HOLD_REPRODUCTION_COMPONENT = components_v2.component(
 
 
 PULSE_RATE_MATCH_COMPONENT = components_v2.component(
-    "pulse_rate_match_v4_linear",
+    "pulse_rate_match_v5_fixed",
     html="""
         <div class="pulse-hold-match">
             <div class="pulse-preview" aria-hidden="true">
@@ -302,22 +302,25 @@ PULSE_RATE_MATCH_COMPONENT = components_v2.component(
             const readoutValue = parentElement.querySelector('.readout-value');
             
             const minRate = 0.10;
-            const maxRate = 3.0;
-            const linearIncrementPerSecond = 0.20;
+            const maxRate = 1.20;
+            // Increase by 0.08/sec to reach 0.50 in ~5 seconds (0.40 / 5 = 0.08)
+            const linearIncrementPerSecond = 0.08;
             
             let currentRate = minRate;
             let holdStartTime = null;
             let holdAnimFrame = null;
             
             // Update pulse animation and readout display with units.
+            // Animation duration = 1 / pulse_rate (e.g., 0.10 pulses/sec = 10s duration)
             const updateDisplay = (rate) => {
                 const clamped = Math.max(minRate, Math.min(maxRate, rate));
                 currentRate = clamped;
-                preview.style.setProperty('--pulse-duration', `${(1 / clamped).toFixed(3)}s`);
+                const animationDuration = 1.0 / clamped;
+                preview.style.setProperty('--pulse-duration', `${animationDuration.toFixed(3)}s`);
                 readoutValue.textContent = clamped.toFixed(2) + ' pulses/second';
             };
             
-            // Hold-to-adjust animation loop with constant linear increase.
+            // Hold-to-adjust animation loop with constant linear increase (no acceleration).
             const holdLoop = () => {
                 const elapsedMs = performance.now() - holdStartTime;
                 const elapsedSeconds = elapsedMs / 1000;
@@ -780,8 +783,8 @@ def _assessment_metadata_for_storage() -> dict[str, Any]:
 def _pulse_hold_seconds_from_rate(rate: float) -> float:
     """Recover approximate hold duration from the pulse matching easing curve."""
     min_rate = 0.1
-    max_rate = 3.0
-    linear_rate = 0.20
+    max_rate = 1.2
+    linear_rate = 0.08
     hold_seconds = (rate - min_rate) / linear_rate
     return max(0.0, min(14.5, hold_seconds))
 
@@ -903,6 +906,15 @@ def _irregular_pulse_style(elapsed: float, plan: list[dict[str, float]]) -> str:
             break
     opacity = 0.65 + (scale - 0.72) * (0.35 / 0.28)
     return f"transform:scale({scale:.4f});opacity:{opacity:.4f}"
+
+
+def _generate_quasi_random_pulse() -> float:
+    """Generate a quasi-random target pulse rate between 0.50 and 1.20 pulses/sec.
+    
+    Avoids consecutive identical values and maintains balanced distribution.
+    """
+    target_rate = random.uniform(0.50, 1.20)
+    return round(target_rate, 2)
 
 
 def render_reproduction() -> None:
@@ -1029,7 +1041,7 @@ def render_estimation() -> None:
         _timed_stage("<div><strong>Focus on the visual display.</strong></div>")
         if st.button("Begin display", type="primary", use_container_width=True):
             st.session_state.task_estimation_display_duration = random.uniform(5.0, 10.0)
-            st.session_state.task_estimation_target_pulse_rate = random.uniform(0.4, 3.0)
+            st.session_state.task_estimation_target_pulse_rate = _generate_quasi_random_pulse()
             st.session_state.task_estimation_started = time.monotonic()
             st.session_state.task_estimation_phase = "display"
             st.rerun()
