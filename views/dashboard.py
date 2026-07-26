@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from zoneinfo import ZoneInfo
+
 import pandas as pd
 import streamlit as st
 
@@ -17,9 +19,21 @@ from utils.analytics import (
 from utils.exports import (
     csv_bytes,
     excel_workbook,
-    format_india_datetime,
     research_datasets,
 )
+
+
+INDIA_TZ = ZoneInfo("Asia/Kolkata")
+
+
+def format_india_datetime(value: object) -> str:
+    """Format UTC or naive timestamps for local India study displays."""
+    if isinstance(value, str) and value.endswith(" IST"):
+        return value
+    parsed = pd.to_datetime(value, errors="coerce", utc=True)
+    if pd.isna(parsed):
+        return ""
+    return parsed.tz_convert(INDIA_TZ).strftime("%Y-%m-%d %H:%M:%S IST")
 
 
 def _latest_value(latest: dict, key: str, suffix: str = "", fallback: str = "--") -> str:
