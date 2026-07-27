@@ -1,5 +1,3 @@
-
-
 """Resumable daily EMA and behavioural assessment workflow."""
 
 from __future__ import annotations
@@ -1050,12 +1048,32 @@ def render_estimation() -> None:
     if phase == "display":
         display_duration = st.session_state.task_estimation_display_duration
         elapsed = time.monotonic() - st.session_state.task_estimation_started
-        pulse_style = _pulse_rate_style(
-            elapsed, st.session_state.task_estimation_target_pulse_rate
-        )
+        target_rate = st.session_state.task_estimation_target_pulse_rate
+        # DEBUG-1/6: was previously driven by _pulse_rate_style(), which
+        # recomputed an inline transform/opacity value every ~80ms via the
+        # Python polling loop below — a fundamentally different timing
+        # mechanism than the reproduction dial's native CSS animation, even
+        # though the underlying math (period = 1/rate) was correct on both
+        # sides. Switched to a native CSS @keyframes animation here too, so
+        # both the reference pulse and the reproduction pulse are driven by
+        # the browser's animation engine on an identical cadence rather than
+        # one being server-round-trip-driven. The keyframe percentages/scale/
+        # opacity values below are kept numerically identical to
+        # PULSE_RATE_MATCH_COMPONENT's ".preview-pulse" @keyframes
+        # preview-pulse rule — they must stay in sync if either is edited.
+        reference_interval_seconds = 1.0 / target_rate
         _timed_stage(
-            f'<div class="stimulus-circle" style="{pulse_style};'
-            'transition:transform .1s linear,opacity .1s linear"></div>'
+            "<style>@keyframes reference-pulse-anim {"
+            "0%,100%{transform:scale(0.85);opacity:0.72;}"
+            "50%{transform:scale(1.0);opacity:1;}"
+            "}</style>"
+            '<div class="stimulus-circle" style="animation:reference-pulse-anim '
+            f'{reference_interval_seconds:.4f}s ease-in-out infinite;"></div>'
+        )
+        st.caption(
+            f"\U0001f527 DEBUG \u2014 reference pulse: {target_rate:.2f} pulses/sec "
+            f"\u2192 animation interval {reference_interval_seconds:.3f}s per beat "
+            "(generated + displayed value, identical)"
         )
         if elapsed >= display_duration:
             st.session_state.task_estimation_phase = "respond"
@@ -1068,6 +1086,12 @@ def render_estimation() -> None:
             "Recreate the pulse rhythm you just observed. "
             "Hold the circular controller and release when the pulse matches the rhythm you saw."
         )
+        target_rate = st.session_state.task_estimation_target_pulse_rate
+        st.caption(
+            f"\U0001f527 DEBUG \u2014 target: {target_rate:.2f} pulses/sec "
+            f"\u2192 animation interval {1.0 / target_rate:.3f}s per beat "
+            "(cross-check against the readout on the dial below)"
+        )
         match_result = PULSE_RATE_MATCH_COMPONENT(
             key="pulse_rate_match",
             height=280,
@@ -1077,14 +1101,15 @@ def render_estimation() -> None:
         if matched_rate is not None:
             target_rate = st.session_state.task_estimation_target_pulse_rate
             participant_rate = float(matched_rate)
+            matching_error = participant_rate - target_rate
             st.session_state.task_estimation_result = {
                 "task_type": "pulse_matching",
                 "target_pulse_rate": target_rate,
                 "matched_pulse_rate": participant_rate,
-                "matching_error": participant_rate - target_rate,
+                "matching_error": matching_error,
                 "reference_pulse_frequency": target_rate,
                 "participant_selected_frequency": participant_rate,
-                "absolute_matching_error": abs(participant_rate - target_rate),
+                "absolute_matching_error": abs(matching_error),
                 "slider_final_value": participant_rate,
                 "number_of_slider_adjustments": 1,
                 "time_taken_to_match": _pulse_hold_seconds_from_rate(participant_rate),
@@ -1092,7 +1117,29 @@ def render_estimation() -> None:
             }
             _append_time_task(st.session_state.task_estimation_result, {})
             st.session_state.task_estimation_phase = "done"
-            st.rerun()
+            # DEBUG-6/6: all seven requested values in one line, written to
+            # the server log (Streamlit Cloud: Manage app -> logs) since the
+            # UX fix below advances immediately and no longer leaves this
+            # screen on-screen long enough to read a caption reliably.
+            print(
+                "[PULSE DEBUG] "
+                f"reference_pulse={target_rate:.4f} pulses/sec "
+                f"(displayed identically; interval={1.0 / target_rate:.4f}s/beat) | "
+                f"participant_selected_rate={participant_rate:.4f} pulses/sec "
+                f"(interval={1.0 / participant_rate:.4f}s/beat) | "
+                f"pulse_matching_error={matching_error:+.4f}"
+            )
+            # UX fix (item 7): previously set phase="done" and st.rerun(),
+            # which landed on a separate "Response recorded" screen that
+            # required an extra manual "Continue" click before advancing —
+            # that intermediate screen, plus the round trip to reach it, is
+            # what was leaving the pulse circle visibly hanging after
+            # release. Advancing straight to next_step() here removes that
+            # extra required step. phase is still set to "done" immediately
+            # above so that navigating back to this task later (e.g. via the
+            # Back button on a later step) correctly shows the harmless
+            # "Response recorded" screen instead of the live dial again.
+            next_step()
         return
     _timed_stage("<div><strong>Response recorded</strong></div>")
     if st.button("Continue", type="primary", use_container_width=True):
@@ -1382,4 +1429,3 @@ def render_assessment(participant_id: str) -> None:
         render_review(participant_id)
     else:
         renderers[step]()
-
