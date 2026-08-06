@@ -56,9 +56,16 @@ chrono-stress-study/
 
 ## Data Storage
 
-The app creates `study_data.db` beside `app.py`. Every assessment is committed in one SQLite transaction so context, task, and cognitive records cannot be partially saved. The database is excluded from Git.
+Production deployments should provide a Supabase PostgreSQL connection string in
+Streamlit Secrets or environment variables using one of these names:
+`SUPABASE_DB_URL`, `SUPABASE_DATABASE_URL`, `DATABASE_URL`, or `POSTGRES_URL`.
+When configured, every assessment is committed directly to PostgreSQL inside a
+single transaction so task, Stroop, and metadata rows cannot be partially saved.
 
-SQLite data on Streamlit Community Cloud is **not durable**: container restarts or redeployments can erase the local database. This is suitable for a professor-facing demonstration, but not for collecting live longitudinal research data. Before real recruitment, replace the repository connection with a persistent managed database such as PostgreSQL and complete the institution's data-protection review.
+If no PostgreSQL URL is configured, the app falls back to the local
+`study_data.db` SQLite database for development only. SQLite files on Streamlit
+Community Cloud are ephemeral and should not be used as the source of truth for
+live longitudinal research data.
 
 ## Wearable Integration
 
@@ -70,11 +77,11 @@ SQLite data on Streamlit Community Cloud is **not durable**: container restarts 
 2. Push the contents of `chrono-stress-study` so `app.py` and `requirements.txt` are at the repository root.
 3. Sign in at [share.streamlit.io](https://share.streamlit.io) with GitHub.
 4. Select **Create app**, choose the new repository and branch, and set the entry point to `app.py`.
-5. Deploy the app. No secrets are required for the mock wearable demonstration.
+5. Add a Supabase PostgreSQL connection string in Streamlit Secrets for durable
+   participant data, then deploy the app.
 
 Do not reuse the repository for the earlier timer app. Keeping each app in its own repository makes deployment and study history much clearer.
 
 ## Research Readiness
 
-Before participant use, replace the illustrative consent language and support details with ethics-approved documents, verify task timing against the deployment environment, add researcher role-based access, use durable encrypted storage, define withdrawal/deletion procedures, and complete accessibility and device testing. Browser-based reaction times are useful for repeated within-person research but should not be presented as laboratory-grade millisecond timing without validation.
-
+Before participant use, replace the illustrative consent language and support details with ethics-approved documents, verify task timing against the deployment environment, define withdrawal/deletion procedures, and complete accessibility and device testing. Browser-based reaction times are useful for repeated within-person research but should not be presented as laboratory-grade millisecond timing without validation.
