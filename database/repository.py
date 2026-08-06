@@ -1,10 +1,17 @@
-"""SQLite persistence layer for study records."""
+"""Persistence layer for study records.
+
+Production deployments use Supabase PostgreSQL when a database URL is provided
+through Streamlit Secrets or environment variables. Local development keeps the
+existing SQLite fallback so the rest of the application can use the same
+repository API without UI, task, or assessment-flow changes.
+"""
 
 from __future__ import annotations
 
 from contextlib import contextmanager
 from datetime import date, datetime, timedelta, timezone
 import json
+import os
 import sqlite3
 from typing import Any, Iterator
 
@@ -13,11 +20,25 @@ import pandas as pd
 
 from config import (
     DAILY_ASSESSMENT_TARGET,
-    DATA_DIR,
     DATABASE_PATH,
-    EXPORTS_DIR,
-    LOGS_DIR,
     STUDY_DURATION_DAYS,
+)
+
+
+POSTGRES_URL_KEYS = (
+    "SUPABASE_DB_URL",
+    "SUPABASE_DATABASE_URL",
+    "DATABASE_URL",
+    "POSTGRES_URL",
+)
+TABLES = (
+    "participants",
+    "consents",
+    "wearable_data",
+    "assessments",
+    "task_results",
+    "cognitive_results",
+    "assessment_metadata",
 )
 
 
@@ -26,12 +47,99 @@ def utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _secret_value(key: str) -> str | None:
+    """Read database credentials from Streamlit Secrets or the environment."""
+    value: str | None = None
+    try:
+        import streamlit as st
+
+        value = st.secrets.get(key)
+    except Exception:
+        value = None
+    return str(value) if value else os.getenv(key)
+
+
+def _postgres_url() -> str | None:
+    for key in POSTGRES_URL_KEYS:
+        value = _secret_value(key)
+        if value:
+            return value
+    try:
+        import streamlit as st
+
+        for section_name in ("supabase", "postgres"):
+            section = st.secrets.get(section_name, {})
+            if hasattr(section, "get"):
+                for key in ("db_url", "database_url", "postgres_url", "connection_string", "uri"):
+                    value = section.get(key)
+                    if value:
+                        return str(value)
+    except Exception:
+        pass
+    return None
+
+
+def database_type() -> str:
+    """Return the active database backend name."""
+    return "postgres" if _postgres_url() else "sqlite"
+
+
+def _is_postgres() -> bool:
+    return database_type() == "postgres"
+
+
+def _sql(query: str) -> str:
+    """Convert SQLite-style placeholders to PostgreSQL placeholders."""
+    return query.replace("?", "%s") if _is_postgres() else query
+
+
+def _row_value(row: Any, key: str, index: int = 0) -> Any:
+    if row is None:
+        return None
+    if isinstance(row, dict):
+        return row.get(key)
+    try:
+        return row[key]
+    except Exception:
+        return row[index]
+
+
+def _execute(conn: Any, query: str, params: Any = ()) -> Any:
+    return conn.execute(_sql(query), params)
+
+
+def _executemany(conn: Any, query: str, rows: list[tuple[Any, ...]]) -> None:
+    if not rows:
+        return
+    if _is_postgres():
+        with conn.cursor() as cursor:
+            cursor.executemany(_sql(query), rows)
+    else:
+        conn.executemany(query, rows)
+
+
+def _scalar(conn: Any, query: str, params: Any = (), key: str = "value") -> Any:
+    row = _execute(conn, query, params).fetchone()
+    return _row_value(row, key)
+
+
 @contextmanager
-def connection() -> Iterator[sqlite3.Connection]:
-    """Open a SQLite connection with foreign keys and row access enabled."""
-    conn = sqlite3.connect(DATABASE_PATH, timeout=20)
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA foreign_keys = ON")
+def connection() -> Iterator[Any]:
+    """Open a database connection with transactions enabled."""
+    if _is_postgres():
+        try:
+            import psycopg
+            from psycopg.rows import dict_row
+        except ImportError as exc:
+            raise RuntimeError(
+                "Supabase/PostgreSQL credentials are configured, but psycopg is "
+                "not installed. Add psycopg[binary] to requirements.txt."
+            ) from exc
+        conn = psycopg.connect(_postgres_url(), row_factory=dict_row)
+    else:
+        conn = sqlite3.connect(DATABASE_PATH, timeout=20)
+        conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA foreign_keys = ON")
     try:
         yield conn
         conn.commit()
@@ -44,9 +152,6 @@ def connection() -> Iterator[sqlite3.Connection]:
 
 def initialise_database() -> None:
     """Create all tables and indexes if they do not yet exist."""
-    for directory in (DATA_DIR, EXPORTS_DIR, LOGS_DIR):
-        directory.mkdir(parents=True, exist_ok=True)
-
     schema = """
     CREATE TABLE IF NOT EXISTS participants (
         participant_id TEXT PRIMARY KEY,
@@ -179,12 +284,23 @@ def initialise_database() -> None:
         ON assessment_metadata(participant_id, assessment_end_time);
     """
     with connection() as conn:
-        conn.executescript(schema)
+        if _is_postgres():
+            postgres_schema = schema.replace(
+                "INTEGER PRIMARY KEY AUTOINCREMENT",
+                "INTEGER PRIMARY KEY GENERATED BY DEFAULT AS IDENTITY",
+            )
+            for statement in postgres_schema.split(";"):
+                if statement.strip():
+                    conn.execute(statement)
+        else:
+            conn.executescript(schema)
         _ensure_longitudinal_columns(conn)
-    _sync_master_exports()
+    if _is_postgres():
+        _migrate_sqlite_to_postgres()
+    _log_database_status()
 
 
-def _ensure_longitudinal_columns(conn: sqlite3.Connection) -> None:
+def _ensure_longitudinal_columns(conn: Any) -> None:
     """Add participant-specific longitudinal keys to existing databases."""
     required_columns = {
         "assessments": {
@@ -209,9 +325,20 @@ def _ensure_longitudinal_columns(conn: sqlite3.Connection) -> None:
         },
     }
     for table, columns in required_columns.items():
-        existing = {
-            row["name"] for row in conn.execute(f"PRAGMA table_info({table})").fetchall()
-        }
+        if _is_postgres():
+            existing = {
+                row["column_name"]
+                for row in conn.execute(
+                    """SELECT column_name
+                       FROM information_schema.columns
+                       WHERE table_schema = 'public' AND table_name = %s""",
+                    (table,),
+                ).fetchall()
+            }
+        else:
+            existing = {
+                row["name"] for row in conn.execute(f"PRAGMA table_info({table})").fetchall()
+            }
         for column, column_type in columns.items():
             if column not in existing:
                 conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {column_type}")
@@ -222,34 +349,122 @@ def _ensure_longitudinal_columns(conn: sqlite3.Connection) -> None:
     )
 
 
-def _sync_master_exports() -> None:
-    """Refresh study-level master CSV files from the current SQLite state."""
-    from utils.exports import sync_master_csvs
+def _log_database_status() -> None:
+    """Print a startup health check without exposing participant data."""
+    with connection() as conn:
+        participant_count = _scalar(
+            conn, "SELECT COUNT(*) AS value FROM participants", key="value"
+        )
+        assessment_count = _scalar(
+            conn, "SELECT COUNT(*) AS value FROM assessments", key="value"
+        )
+    print(f"ChronoStress database type: {database_type()}")
+    print(f"ChronoStress participant count: {participant_count}")
+    print(f"ChronoStress assessment count: {assessment_count}")
 
-    sync_master_csvs(all_study_frames())
+
+def _sqlite_source_frames() -> dict[str, pd.DataFrame]:
+    """Read any existing local SQLite data for one-time Supabase migration."""
+    if not DATABASE_PATH.exists():
+        return {}
+    source = sqlite3.connect(DATABASE_PATH)
+    try:
+        frames: dict[str, pd.DataFrame] = {}
+        for table in TABLES:
+            try:
+                frames[table] = pd.read_sql_query(f"SELECT * FROM {table}", source)
+            except Exception:
+                frames[table] = pd.DataFrame()
+        return frames
+    finally:
+        source.close()
+
+
+def _safe_db_value(value: Any) -> Any:
+    """Convert pandas/numpy missing values to database NULL during migration."""
+    if pd.isna(value):
+        return None
+    if isinstance(value, np.generic):
+        return value.item()
+    return value
+
+
+def _migrate_sqlite_to_postgres() -> None:
+    """Copy existing local SQLite records to Supabase without changing schema.
+
+    Streamlit Community Cloud storage is ephemeral, but a developer may have
+    local SQLite pilot records before configuring Supabase. This migration is
+    idempotent: existing primary keys or participant IDs are left untouched.
+    """
+    frames = _sqlite_source_frames()
+    if not frames:
+        return
+
+    with connection() as conn:
+        for table in TABLES:
+            frame = frames.get(table, pd.DataFrame())
+            if frame.empty:
+                continue
+            columns = list(frame.columns)
+            placeholders = ", ".join(["%s"] * len(columns))
+            column_sql = ", ".join(columns)
+            query = (
+                f"INSERT INTO {table} ({column_sql}) "
+                f"VALUES ({placeholders}) ON CONFLICT DO NOTHING"
+            )
+            rows = [
+                tuple(_safe_db_value(value) for value in row)
+                for row in frame.itertuples(index=False, name=None)
+            ]
+            with conn.cursor() as cursor:
+                cursor.executemany(query, rows)
+
+        for table in (
+            "consents",
+            "wearable_data",
+            "assessments",
+            "task_results",
+            "cognitive_results",
+        ):
+            conn.execute(
+                f"""SELECT setval(
+                    pg_get_serial_sequence('{table}', 'id'),
+                    GREATEST(COALESCE((SELECT MAX(id) FROM {table}), 1), 1),
+                    true
+                )"""
+            )
 
 
 def _longitudinal_context(
-    conn: sqlite3.Connection, participant_id: str, submitted_at: str
+    conn: Any, participant_id: str, submitted_at: str
 ) -> dict[str, Any]:
-    participant = conn.execute(
+    participant = _execute(
+        conn,
         "SELECT enrolled_at FROM participants WHERE participant_id = ?", (participant_id,)
     ).fetchone()
     if participant is None:
         raise ValueError("Assessment cannot be saved without a valid participant_id.")
 
     submitted_date = datetime.fromisoformat(submitted_at).date()
-    enrolled_date = datetime.fromisoformat(participant["enrolled_at"]).date()
+    enrolled_date = datetime.fromisoformat(_row_value(participant, "enrolled_at")).date()
     day_number = (submitted_date - enrolled_date).days + 1
-    prompt_number = int(
-        conn.execute(
-            """SELECT COUNT(*) FROM assessments
-               WHERE participant_id = ? AND date(submitted_at) = date(?)""",
-            (participant_id, submitted_at),
-        ).fetchone()[0]
-    ) + 1
+    existing_rows = _execute(
+        conn,
+        "SELECT submitted_at FROM assessments WHERE participant_id = ?",
+        (participant_id,),
+    ).fetchall()
+    prompt_number = (
+        sum(
+            1
+            for row in existing_rows
+            if datetime.fromisoformat(_row_value(row, "submitted_at")).date()
+            == submitted_date
+        )
+        + 1
+    )
     assessment_uid = f"{participant_id}_D{day_number:02d}_P{prompt_number:02d}"
-    duplicate = conn.execute(
+    duplicate = _execute(
+        conn,
         "SELECT 1 FROM assessments WHERE assessment_uid = ?", (assessment_uid,)
     ).fetchone()
     if duplicate:
@@ -263,7 +478,8 @@ def _longitudinal_context(
 
 def participant_exists(participant_id: str) -> bool:
     with connection() as conn:
-        row = conn.execute(
+        row = _execute(
+            conn,
             "SELECT 1 FROM participants WHERE participant_id = ?", (participant_id,)
         ).fetchone()
     return row is not None
@@ -279,7 +495,8 @@ def create_participant(record: dict[str, Any]) -> None:
     values = [record.get(field) for field in fields]
     placeholders = ", ".join("?" for _ in fields)
     with connection() as conn:
-        conn.execute(
+        _execute(
+            conn,
             f"INSERT INTO participants ({', '.join(fields)}) VALUES ({placeholders})",
             values,
         )
@@ -287,7 +504,8 @@ def create_participant(record: dict[str, Any]) -> None:
 
 def get_participant(participant_id: str) -> dict[str, Any] | None:
     with connection() as conn:
-        row = conn.execute(
+        row = _execute(
+            conn,
             "SELECT * FROM participants WHERE participant_id = ?", (participant_id,)
         ).fetchone()
     return dict(row) if row else None
@@ -295,7 +513,8 @@ def get_participant(participant_id: str) -> dict[str, Any] | None:
 
 def save_consent(participant_id: str) -> None:
     with connection() as conn:
-        conn.execute(
+        _execute(
+            conn,
             """INSERT INTO consents
                (participant_id, consent_version, privacy_accepted,
                 participation_accepted, consented_at)
@@ -306,7 +525,8 @@ def save_consent(participant_id: str) -> None:
 
 def has_consent(participant_id: str) -> bool:
     with connection() as conn:
-        row = conn.execute(
+        row = _execute(
+            conn,
             "SELECT 1 FROM consents WHERE participant_id = ? LIMIT 1",
             (participant_id,),
         ).fetchone()
@@ -334,11 +554,15 @@ def save_assessment(
     with connection() as conn:
         submitted_at = utc_now()
         context = _longitudinal_context(conn, participant_id, submitted_at)
-        cursor = conn.execute(
-            f"""INSERT INTO assessments
+        assessment_insert = f"""INSERT INTO assessments
                 (participant_id, assessment_uid, day_number, prompt_number,
                  started_at, submitted_at, {', '.join(assessment_fields)})
-                VALUES (?, ?, ?, ?, ?, ?, {', '.join('?' for _ in assessment_fields)})""",
+                VALUES (?, ?, ?, ?, ?, ?, {', '.join('?' for _ in assessment_fields)})"""
+        if _is_postgres():
+            assessment_insert += " RETURNING id"
+        cursor = _execute(
+            conn,
+            assessment_insert,
             [
                 participant_id,
                 context["assessment_uid"],
@@ -349,10 +573,15 @@ def save_assessment(
             ]
             + [answers.get(field) for field in assessment_fields],
         )
-        assessment_id = int(cursor.lastrowid)
+        assessment_id = (
+            int(_row_value(cursor.fetchone(), "id"))
+            if _is_postgres()
+            else int(cursor.lastrowid)
+        )
 
         for task in time_tasks:
-            conn.execute(
+            _execute(
+                conn,
                 """INSERT INTO task_results
                    (assessment_id, assessment_uid, participant_id, day_number,
                     prompt_number, task_type, target_seconds,
@@ -375,7 +604,8 @@ def save_assessment(
                 ),
             )
 
-        conn.execute(
+        _execute(
+            conn,
             """INSERT INTO cognitive_results
                (assessment_id, assessment_uid, participant_id, day_number,
                 prompt_number, task_type, accuracy,
@@ -414,20 +644,33 @@ def save_assessment(
                 "day_number": context["day_number"],
                 "prompt_number": context["prompt_number"],
             }
-            conn.execute(
-                f"""INSERT OR REPLACE INTO assessment_metadata
+            metadata_insert = f"""INSERT INTO assessment_metadata
                     (assessment_id, participant_id, {', '.join(metadata_fields)})
-                    VALUES (?, ?, {', '.join('?' for _ in metadata_fields)})""",
+                    VALUES (?, ?, {', '.join('?' for _ in metadata_fields)})"""
+            if _is_postgres():
+                metadata_insert += (
+                    " ON CONFLICT (assessment_id) DO UPDATE SET "
+                    + ", ".join(
+                        f"{field} = EXCLUDED.{field}"
+                        for field in ("participant_id",) + metadata_fields
+                    )
+                )
+            else:
+                metadata_insert = metadata_insert.replace(
+                    "INSERT INTO", "INSERT OR REPLACE INTO", 1
+                )
+            _execute(
+                conn,
+                metadata_insert,
                 [assessment_id, participant_id]
                 + [metadata_payload.get(field) for field in metadata_fields],
             )
-    _sync_master_exports()
     return assessment_id
 
 
 def dataframe(query: str, params: tuple[Any, ...] = ()) -> pd.DataFrame:
     with connection() as conn:
-        return pd.read_sql_query(query, conn, params=params)
+        return pd.read_sql_query(_sql(query), conn, params=params)
 
 
 def participant_frames(participant_id: str) -> dict[str, pd.DataFrame]:
@@ -479,10 +722,11 @@ def all_study_frames() -> dict[str, pd.DataFrame]:
 def seed_mock_wearable(participant_id: str, days: int = STUDY_DURATION_DAYS) -> None:
     """Create deterministic demonstration wearable observations once."""
     with connection() as conn:
-        count = conn.execute(
-            "SELECT COUNT(*) FROM wearable_data WHERE participant_id = ?",
+        count = _scalar(
+            conn,
+            "SELECT COUNT(*) AS value FROM wearable_data WHERE participant_id = ?",
             (participant_id,),
-        ).fetchone()[0]
+        )
         if count:
             return
 
@@ -514,7 +758,8 @@ def seed_mock_wearable(participant_id: str, days: int = STUDY_DURATION_DAYS) -> 
                     "mock",
                 )
             )
-        conn.executemany(
+        _executemany(
+            conn,
             """INSERT INTO wearable_data
                (participant_id, recorded_at, provider, heart_rate, hrv,
                 resting_hr, sleep_hours, stress_score, recovery_score,
