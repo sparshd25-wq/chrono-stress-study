@@ -475,6 +475,7 @@ STROOP_TOUCH_RESPONSE_COMPONENT = components_v2.component(
     """,
 )
 
+
 def start_assessment() -> None:
     """Create a fresh in-session assessment record."""
     for key in list(st.session_state):
@@ -709,7 +710,7 @@ def render_scales() -> None:
         '<div class="stress-anchors">'
         + "".join(
             (
-                f'<div class="stress-anchor {"active" if value == stress_score else ""}">'
+                f'<div class="stress-anchor {"active" if value == stress_score else ""}'>
                 f"<span>{value}</span>{STRESS_LABELS[value]}</div>"
             )
             for value in range(1, 8)
@@ -1039,12 +1040,19 @@ def render_estimation() -> None:
     assessment_header(3, TOTAL_STEPS, "Pulse rhythm matching", "Under 1 min")
     phase = st.session_state.get("task_estimation_phase", "ready")
     if phase == "ready":
-        # No intermediary 'Begin display' screen — start the stimulus immediately.
-        st.session_state.task_estimation_display_duration = random.uniform(5.0, 10.0)
-        st.session_state.task_estimation_target_pulse_rate = _generate_quasi_random_pulse()
-        st.session_state.task_estimation_started = time.monotonic()
-        st.session_state.task_estimation_phase = "display"
-        st.rerun()
+        # Show a short purpose-focused introduction before the reference appears.
+        st.write(
+            "In this task, you will observe a reference pulse rhythm and then reproduce it from memory.\n\n"
+            "Watch the pulse carefully. After it disappears, you will recreate the same rhythm."
+        )
+        _timed_stage("<div><strong>Get ready to watch the pulse.</strong></div>")
+        if st.button("Begin display", type="primary", use_container_width=True):
+            st.session_state.task_estimation_display_duration = random.uniform(5.0, 10.0)
+            st.session_state.task_estimation_target_pulse_rate = _generate_quasi_random_pulse()
+            st.session_state.task_estimation_started = time.monotonic()
+            st.session_state.task_estimation_phase = "display"
+            st.rerun()
+        navigation_back()
         return
 
     if phase == "display":
@@ -1059,7 +1067,7 @@ def render_estimation() -> None:
             "50%{transform:scale(1.0);opacity:1;}"
             "}</style>"
             '<div class="stimulus-circle" style="animation:reference-pulse-anim '
-            f'{reference_interval_seconds:.4f}s ease-in-out infinite;"></div>'
+            f'{reference_interval_seconds:.4f}s ease-in-out infinite;'></div>'
         )
         # No debug caption shown to participants.
         if elapsed >= display_duration:
