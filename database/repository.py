@@ -244,14 +244,37 @@ def connection() -> Iterator[Any]:
     global _synced_once
     turso_url, turso_token, use_libsql = _turso_status()
     if use_libsql:
-        raw_conn = libsql.connect(
-            str(DATABASE_PATH), sync_url=turso_url, auth_token=turso_token
-        )
-        if not _synced_once:
-            with _sync_lock:
-                if not _synced_once:
-                    raw_conn.sync()
-                    _synced_once = True
+        try:
+            raw_conn = libsql.connect(
+                str(DATABASE_PATH), sync_url=turso_url, auth_token=turso_token
+            )
+            if not _synced_once:
+                with _sync_lock:
+                    if not _synced_once:
+                        raw_conn.sync()
+                        _synced_once = True
+        except Exception as exc:
+            # Streamlit Cloud redacts every uncaught exception that
+            # reaches it, replacing the message with a generic "redacted
+            # to prevent data leaks" notice -- which hides exactly the
+            # detail needed to fix a Turso connection problem. Catching
+            # it here and re-raising as RuntimeError routes it through
+            # app.py's explicit handler instead, which shows it via
+            # st.error() and bypasses that blanket redaction. The raw
+            # URL/token are stripped from the text first regardless, as
+            # a precaution, even though they don't typically appear in
+            # these error messages.
+            detail = str(exc)
+            if turso_url:
+                detail = detail.replace(turso_url, "<TURSO_DATABASE_URL>")
+            if turso_token:
+                detail = detail.replace(turso_token, "<TURSO_AUTH_TOKEN>")
+            raise RuntimeError(
+                f"Could not connect to Turso ({type(exc).__name__}: {detail}). "
+                "Check that TURSO_DATABASE_URL starts with libsql:// "
+                "(not https://) and that TURSO_AUTH_TOKEN is current, "
+                "in the app's Secrets."
+            ) from exc
         conn: Any = _LibsqlConnection(raw_conn)
     else:
         conn = sqlite3.connect(DATABASE_PATH, timeout=20)
