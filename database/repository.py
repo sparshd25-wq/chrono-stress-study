@@ -1,4 +1,3 @@
-# repository.py (updated)
 """SQLite / Turso (libSQL) persistence layer for study records.
 
 Streamlit Community Cloud gives each app an *ephemeral* local disk: the
@@ -208,22 +207,14 @@ class _LibsqlConnection:
 
     def __init__(self, raw_connection: Any) -> None:
         self._conn = raw_connection
-        self._dirty = False  # track whether any write occurred
 
     def execute(self, sql: str, parameters: Any = ()) -> _LibsqlCursor:
-        # Mark dirty for INSERT/UPDATE/DELETE, but not SELECT
-        if sql.lstrip().upper().startswith(("INSERT", "UPDATE", "DELETE", "CREATE", "ALTER", "DROP")):
-            self._dirty = True
         return _LibsqlCursor(self._conn.execute(sql, parameters))
 
     def executemany(self, sql: str, seq_of_parameters: Any) -> _LibsqlCursor:
-        if sql.lstrip().upper().startswith(("INSERT", "UPDATE", "DELETE", "CREATE", "ALTER", "DROP")):
-            self._dirty = True
         return _LibsqlCursor(self._conn.executemany(sql, seq_of_parameters))
 
     def executescript(self, script: str) -> Any:
-        # Assume script may contain writes
-        self._dirty = True
         return self._conn.executescript(script)
 
     def cursor(self) -> Any:
@@ -231,14 +222,13 @@ class _LibsqlConnection:
         return self._conn.cursor()
 
     def commit(self) -> None:
+        wrote = self._conn.in_transaction
         self._conn.commit()
-        if self._dirty:
+        if wrote:
             self._conn.sync()
-            self._dirty = False
 
     def rollback(self) -> None:
         self._conn.rollback()
-        self._dirty = False
 
     def sync(self) -> None:
         self._conn.sync()
