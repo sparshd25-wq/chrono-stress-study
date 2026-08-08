@@ -1,4 +1,3 @@
-# auth.py (updated)
 """Welcome, consent, registration, and participant access views."""
 
 from __future__ import annotations
@@ -153,52 +152,43 @@ def render_registration() -> None:
         average_sleep = st.slider("Average sleep duration", 3.0, 12.0, 7.0, .25, format="%.2f hours")
         submitted = st.form_submit_button("Create participant account", type="primary", use_container_width=True)
     if submitted:
-        try:
-            errors = []
-            if not re.fullmatch(r"[A-Z0-9-]{4,20}", participant_id):
-                errors.append("Participant ID must use 4-20 letters, numbers, or hyphens.")
-            if len(access_code) < 6:
-                errors.append("Access code must contain at least 6 characters.")
-            if not occupation.strip():
-                errors.append("Please enter an occupation or academic role.")
-            if participant_exists(participant_id):
-                errors.append("That participant ID already exists. Sign in instead.")
-            if errors:
-                for error in errors:
-                    st.error(error)
-                return
-            create_participant(
-                {
-                    "participant_id": participant_id,
-                    "access_code_hash": hash_access_code(access_code),
-                    "age": age,
-                    "gender": gender,
-                    "occupation": occupation.strip(),
-                    "academic_status": academic_status,
-                    "medication": medication.strip() or "None reported",
-                    "sleep_disorders": sleep_disorders,
-                    "mental_health_diagnosis": diagnosis.strip() or None,
-                    "coffee_per_day": coffee,
-                    "smoking": smoking,
-                    "alcohol": alcohol,
-                    "average_sleep_hours": average_sleep,
-                    "enrolled_at": datetime.now(timezone.utc).isoformat(),
-                    "study_days": STUDY_DURATION_DAYS,
-                }
-            )
-            participant = get_participant(participant_id)
-            if participant is None:
-                st.error("Failed to retrieve the newly created participant. Please try again.")
-                return
-            save_consent(participant_id)
-            DemoWearableProvider().sync(participant_id)
-            _sign_in(participant)
-            st.rerun()
-        except Exception as e:
-            st.error(f"Registration error: {e}")
-            # Optionally log the full exception
-            import traceback
-            st.error(traceback.format_exc())
+        errors = []
+        if not re.fullmatch(r"[A-Z0-9-]{4,20}", participant_id):
+            errors.append("Participant ID must use 4-20 letters, numbers, or hyphens.")
+        if len(access_code) < 6:
+            errors.append("Access code must contain at least 6 characters.")
+        if not occupation.strip():
+            errors.append("Please enter an occupation or academic role.")
+        if participant_exists(participant_id):
+            errors.append("That participant ID already exists. Sign in instead.")
+        if errors:
+            for error in errors:
+                st.error(error)
+            return
+        create_participant(
+            {
+                "participant_id": participant_id,
+                "access_code_hash": hash_access_code(access_code),
+                "age": age,
+                "gender": gender,
+                "occupation": occupation.strip(),
+                "academic_status": academic_status,
+                "medication": medication.strip() or "None reported",
+                "sleep_disorders": sleep_disorders,
+                "mental_health_diagnosis": diagnosis.strip() or None,
+                "coffee_per_day": coffee,
+                "smoking": smoking,
+                "alcohol": alcohol,
+                "average_sleep_hours": average_sleep,
+                "enrolled_at": datetime.now(timezone.utc).isoformat(),
+                "study_days": STUDY_DURATION_DAYS,
+            }
+        )
+        participant = get_participant(participant_id)
+        save_consent(participant_id)
+        DemoWearableProvider().sync(participant_id)
+        _sign_in(participant)
+        st.rerun()
     if st.button("Back to consent"):
         st.session_state.auth_view = "consent"
         st.rerun()
@@ -212,45 +202,40 @@ def render_login() -> None:
         access_code = st.text_input("Access code", type="password")
         submitted = st.form_submit_button("Sign in", type="primary", use_container_width=True)
     if submitted:
-        try:
-            participant = get_participant(participant_id)
-            if participant is None:
-                if not re.fullmatch(r"[A-Z0-9-]{4,20}", participant_id) or len(access_code) < 6:
-                    st.error("Invalid Participant ID or Access Code.")
-                    return
-                create_participant(
-                    {
-                        "participant_id": participant_id,
-                        "access_code_hash": hash_access_code(access_code),
-                        "age": 18,
-                        "gender": "Prefer not to say",
-                        "occupation": "Not collected",
-                        "academic_status": "Other",
-                        "medication": "Not collected",
-                        "sleep_disorders": "Prefer not to say",
-                        "mental_health_diagnosis": None,
-                        "coffee_per_day": 0,
-                        "smoking": "Prefer not to say",
-                        "alcohol": "Prefer not to say",
-                        "average_sleep_hours": 7.0,
-                        "enrolled_at": datetime.now(timezone.utc).isoformat(),
-                        "study_days": STUDY_DURATION_DAYS,
-                    }
-                )
-                participant = get_participant(participant_id)
-            elif not verify_access_code(access_code, participant["access_code_hash"]):
+        participant = get_participant(participant_id)
+        if participant is None:
+            if not re.fullmatch(r"[A-Z0-9-]{4,20}", participant_id) or len(access_code) < 6:
                 st.error("Invalid Participant ID or Access Code.")
                 return
-
-            if participant:
-                DemoWearableProvider().sync(participant_id)
-                _sign_in(participant)
-                st.rerun()
+            create_participant(
+                {
+                    "participant_id": participant_id,
+                    "access_code_hash": hash_access_code(access_code),
+                    "age": 18,
+                    "gender": "Prefer not to say",
+                    "occupation": "Not collected",
+                    "academic_status": "Other",
+                    "medication": "Not collected",
+                    "sleep_disorders": "Prefer not to say",
+                    "mental_health_diagnosis": None,
+                    "coffee_per_day": 0,
+                    "smoking": "Prefer not to say",
+                    "alcohol": "Prefer not to say",
+                    "average_sleep_hours": 7.0,
+                    "enrolled_at": datetime.now(timezone.utc).isoformat(),
+                    "study_days": STUDY_DURATION_DAYS,
+                }
+            )
+            participant = get_participant(participant_id)
+        elif not verify_access_code(access_code, participant["access_code_hash"]):
             st.error("Invalid Participant ID or Access Code.")
-        except Exception as e:
-            st.error(f"Sign-in error: {e}")
-            import traceback
-            st.error(traceback.format_exc())
+            return
+
+        if participant:
+            DemoWearableProvider().sync(participant_id)
+            _sign_in(participant)
+            st.rerun()
+        st.error("Invalid Participant ID or Access Code.")
     if st.button("Back", use_container_width=True):
         st.session_state.auth_view = "welcome"
         st.rerun()
