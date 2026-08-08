@@ -222,10 +222,17 @@ class _LibsqlConnection:
         return self._conn.cursor()
 
     def commit(self) -> None:
-        wrote = self._conn.in_transaction
-        self._conn.commit()
-        if wrote:
-            self._conn.sync()
+-        wrote = self._conn.in_transaction
+-        self._conn.commit()
+-        if wrote:
+-            self._conn.sync()
++        wrote = self._conn.in_transaction
++        print(f"[ChronoStress][DB] _LibsqlConnection.commit() wrote={wrote}")
++        self._conn.commit()
++        if wrote:
++            print("[ChronoStress][DB] _LibsqlConnection.commit() triggering sync() to Turso")
++            self._conn.sync()
++            print("[ChronoStress][DB] _LibsqlConnection.commit() sync() complete")
 
     def rollback(self) -> None:
         self._conn.rollback()
@@ -309,13 +316,22 @@ def connection() -> Iterator[Any]:
         conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
     try:
-        yield conn
-        conn.commit()
+-        yield conn
+-        conn.commit()
++        print("[ChronoStress][DB] connection() opened; yielding connection")
++        yield conn
++        print("[ChronoStress][DB] connection() context exiting: committing")
++        conn.commit()
     except Exception:
-        conn.rollback()
-        raise
+-        conn.rollback()
+-        raise
++        print("[ChronoStress][DB] connection() caught exception: rolling back")
++        conn.rollback()
++        raise
     finally:
-        conn.close()
+-        conn.close()
++        print("[ChronoStress][DB] connection() closing")
++        conn.close()
 
 
 def turso_diagnostics() -> dict[str, Any]:
