@@ -1067,7 +1067,7 @@ def render_estimation() -> None:
             "50%{transform:scale(1.0);opacity:1;}"
             "}</style>"
             '<div class="stimulus-circle" style="animation:reference-pulse-anim '
-            f'{reference_interval_seconds:.4f}s ease-in-out infinite;'></div>'
+            f'{reference_interval_seconds:.4f}s ease-in-out infinite;"></div>'
         )
         # No debug caption shown to participants.
         if elapsed >= display_duration:
