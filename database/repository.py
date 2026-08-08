@@ -80,13 +80,21 @@ def _read_secret(name: str) -> str | None:
 def _turso_credentials() -> tuple[str | None, str | None]:
     return _read_secret("TURSO_DATABASE_URL"), _read_secret("TURSO_AUTH_TOKEN")
 
-
-_TURSO_URL, _TURSO_TOKEN = _turso_credentials()
-_USE_LIBSQL = bool(_TURSO_URL and _TURSO_TOKEN and libsql is not None)
-
 _sync_lock = threading.Lock()
 _synced_once = False
 _schema_ready = False
+
+
+def _turso_status() -> tuple[str | None, str | None, bool]:
+    """Resolve Turso credentials fresh on every call instead of caching
+    them once at module-import time. Import time runs before Streamlit
+    has necessarily attached ``st.secrets`` to this process on every code
+    path, and a stale ``False`` snapshot taken then would otherwise pin
+    the whole process to local SQLite for its entire lifetime with no
+    error -- which is exactly the "CSV works, Turso has zero tables"
+    failure mode this replaces."""
+    url, token = _turso_credentials()
+    return url, token, bool(url and token and libsql is not None)
 
 
 def _running_on_streamlit_cloud() -> bool:
@@ -234,9 +242,10 @@ def connection() -> Iterator[Any]:
     docstring for why this matters on Streamlit Community Cloud.
     """
     global _synced_once
-    if _USE_LIBSQL:
+    turso_url, turso_token, use_libsql = _turso_status()
+    if use_libsql:
         raw_conn = libsql.connect(
-            str(DATABASE_PATH), sync_url=_TURSO_URL, auth_token=_TURSO_TOKEN
+            str(DATABASE_PATH), sync_url=turso_url, auth_token=turso_token
         )
         if not _synced_once:
             with _sync_lock:
@@ -267,14 +276,15 @@ def turso_diagnostics() -> dict[str, Any]:
 
         st.json(turso_diagnostics())
     """
+    turso_url, turso_token, use_libsql = _turso_status()
     info: dict[str, Any] = {
-        "turso_credentials_detected": bool(_TURSO_URL and _TURSO_TOKEN),
+        "turso_credentials_detected": bool(turso_url and turso_token),
         "libsql_driver_loaded": libsql is not None,
-        "using_turso": _USE_LIBSQL,
-        "mode": "Turso (libSQL embedded replica)" if _USE_LIBSQL else "Local SQLite",
+        "using_turso": use_libsql,
+        "mode": "Turso (libSQL embedded replica)" if use_libsql else "Local SQLite",
         "detected_as_streamlit_cloud": _running_on_streamlit_cloud(),
     }
-    if _USE_LIBSQL:
+    if use_libsql:
         try:
             with connection() as conn:
                 info["participant_count"] = conn.execute(
@@ -293,21 +303,30 @@ def turso_diagnostics() -> dict[str, Any]:
 def initialise_database() -> None:
     """Create all tables and indexes if they do not yet exist."""
     global _schema_ready
-    if not _USE_LIBSQL and _running_on_streamlit_cloud():
+    turso_url, turso_token, use_libsql = _turso_status()
+    turso_configured = bool(turso_url and turso_token)
+    if not use_libsql and (turso_configured or _running_on_streamlit_cloud()):
         missing = []
-        if not (_TURSO_URL and _TURSO_TOKEN):
+        if not turso_configured:
             missing.append("TURSO_DATABASE_URL / TURSO_AUTH_TOKEN secrets")
         if libsql is None:
             missing.append("the libsql package (check requirements.txt / the build log)")
         raise RuntimeError(
-            "ChronoStress is running on Streamlit Community Cloud without a "
-            "working Turso connection (missing: " + "; ".join(missing) + "). "
-            "Refusing to fall back to local SQLite here, since that storage "
-            "is wiped on every sleep/restart and participant data would be "
-            "silently lost. Add TURSO_DATABASE_URL and TURSO_AUTH_TOKEN in "
-            "the app's Secrets, or set CHRONOSTRESS_REQUIRE_TURSO=false if "
+            "ChronoStress has Turso configured (or is running on Streamlit "
+            "Community Cloud) but does not have a working Turso connection "
+            "(missing: " + "; ".join(missing) + "). Refusing to fall back "
+            "to local SQLite here, since that storage is wiped on every "
+            "sleep/restart and participant data would be silently lost. "
+            "Double-check TURSO_DATABASE_URL and TURSO_AUTH_TOKEN in the "
+            "app's Secrets, or set CHRONOSTRESS_REQUIRE_TURSO=false if "
             "ephemeral storage is genuinely intended here."
         )
+    print(
+        f"[ChronoStress] database mode: "
+        f"{'Turso (libSQL embedded replica)' if use_libsql else 'local SQLite'}"
+        f" | turso_credentials_detected={turso_configured}"
+        f" | libsql_driver_loaded={libsql is not None}"
+    )
     for directory in (DATA_DIR, EXPORTS_DIR, LOGS_DIR):
         directory.mkdir(parents=True, exist_ok=True)
 
@@ -455,7 +474,7 @@ def initialise_database() -> None:
     with connection() as conn:
         conn.executescript(schema)
         _ensure_longitudinal_columns(conn)
-        if _USE_LIBSQL:
+        if use_libsql:
             # DDL (CREATE TABLE/INDEX, ALTER TABLE) doesn't set
             # in_transaction, so the ordinary commit-triggered sync in
             # _LibsqlConnection.commit() wouldn't push it. Do it explicitly
