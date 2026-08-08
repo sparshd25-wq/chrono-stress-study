@@ -1,12 +1,35 @@
+"""SQLite / Turso (libSQL) persistence layer for study records.
 
-"""SQLite persistence layer for study records."""
+Streamlit Community Cloud gives each app an *ephemeral* local disk: the
+filesystem is reset whenever the app sleeps from inactivity, restarts, or
+is redeployed. A plain ``sqlite3.connect(DATABASE_PATH)`` file therefore
+cannot be trusted to keep participant data -- which is exactly what wiped
+every participant, assessment, and event after the last sleep/wake cycle.
+
+To fix that without touching the schema, the queries, or anything calling
+into this module, ``connection()`` below transparently uses a Turso
+(libSQL) *embedded replica* instead of a bare local file whenever
+``TURSO_DATABASE_URL`` / ``TURSO_AUTH_TOKEN`` are configured (via
+``st.secrets`` or environment variables): reads are served from a fast
+local replica file exactly like SQLite always was, and every write is
+synced to the remote, durable Turso primary as part of its commit. A
+freshly started process resyncs from that primary on its very first
+connection, so a container that just woke up (with an empty local disk)
+comes back with every existing participant intact.
+
+Without those credentials configured (e.g. local development), this
+module falls back to the original local SQLite file, completely
+unchanged -- nothing about local development changes.
+"""
 
 from __future__ import annotations
 
 from contextlib import contextmanager
 from datetime import date, datetime, timedelta, timezone
 import json
+import os
 import sqlite3
+import threading
 from typing import Any, Iterator
 
 import numpy as np
@@ -21,6 +44,157 @@ from config import (
     STUDY_DURATION_DAYS,
 )
 
+try:
+    import libsql_experimental as libsql
+except ImportError:  # pragma: no cover - optional dependency
+    libsql = None
+
+
+def _read_secret(name: str) -> str | None:
+    """Read a config value from Streamlit secrets, falling back to the
+    environment. Never raises: an app with no secrets.toml at all (the
+    normal case for local development) is treated the same as the key
+    simply being absent, so it falls back to plain SQLite below."""
+    try:
+        import streamlit as st
+
+        value = st.secrets.get(name)
+        if value:
+            return str(value)
+    except Exception:
+        pass
+    return os.environ.get(name)
+
+
+def _turso_credentials() -> tuple[str | None, str | None]:
+    return _read_secret("TURSO_DATABASE_URL"), _read_secret("TURSO_AUTH_TOKEN")
+
+
+_TURSO_URL, _TURSO_TOKEN = _turso_credentials()
+_USE_LIBSQL = bool(_TURSO_URL and _TURSO_TOKEN and libsql is not None)
+
+_sync_lock = threading.Lock()
+_synced_once = False
+_schema_ready = False
+
+
+class _Row:
+    """Mapping-style row -- supports ``row["col"]``, ``row[0]``, and
+    ``dict(row)`` -- matching ``sqlite3.Row`` behaviour for result tuples
+    returned by libsql_experimental, which has no row_factory of its own."""
+
+    __slots__ = ("_columns", "_values")
+
+    def __init__(self, columns: list[str], values: tuple[Any, ...]) -> None:
+        self._columns = columns
+        self._values = values
+
+    def __getitem__(self, key: Any) -> Any:
+        if isinstance(key, str):
+            return self._values[self._columns.index(key)]
+        return self._values[key]
+
+    def keys(self) -> list[str]:
+        return list(self._columns)
+
+    def __iter__(self) -> Iterator[Any]:
+        return iter(self._values)
+
+    def __len__(self) -> int:
+        return len(self._values)
+
+    def __repr__(self) -> str:  # pragma: no cover - debugging aid
+        return f"Row({dict(zip(self._columns, self._values))})"
+
+
+class _LibsqlCursor:
+    """Wraps a libsql_experimental cursor so fetched rows support the same
+    dict-style access as sqlite3.Row-backed cursors do."""
+
+    def __init__(self, cursor: Any) -> None:
+        self._cursor = cursor
+
+    def _columns(self) -> list[str] | None:
+        if self._cursor.description is None:
+            return None
+        return [col[0] for col in self._cursor.description]
+
+    def fetchone(self) -> Any:
+        row = self._cursor.fetchone()
+        if row is None:
+            return None
+        columns = self._columns()
+        return _Row(columns, row) if columns else row
+
+    def fetchall(self) -> list[Any]:
+        rows = self._cursor.fetchall()
+        columns = self._columns()
+        if not columns:
+            return rows
+        return [_Row(columns, row) for row in rows]
+
+    def fetchmany(self, size: int | None = None) -> list[Any]:
+        rows = self._cursor.fetchmany(size) if size is not None else self._cursor.fetchmany()
+        columns = self._columns()
+        if not columns:
+            return rows
+        return [_Row(columns, row) for row in rows]
+
+    @property
+    def lastrowid(self) -> Any:
+        return self._cursor.lastrowid
+
+    @property
+    def rowcount(self) -> Any:
+        return getattr(self._cursor, "rowcount", -1)
+
+
+class _LibsqlConnection:
+    """Adapts a libsql_experimental Connection (a local embedded replica of
+    the remote Turso database) to the subset of the sqlite3.Connection
+    interface this repository relies on: dict-style row access via
+    execute()/fetchone()/fetchall(), executemany, executescript, and a
+    cursor() passthrough for pandas.
+
+    Only commits that actually wrote data trigger a sync to the remote
+    primary (checked via ``in_transaction``, which is only true after a
+    real INSERT/UPDATE/DELETE) -- so the frequent read-only connections
+    opened throughout the app (e.g. the participant lookup that runs on
+    every rerun, including during the timed Stroop trials) never pay for
+    a network round trip, and assessment timing is unaffected.
+    """
+
+    def __init__(self, raw_connection: Any) -> None:
+        self._conn = raw_connection
+
+    def execute(self, sql: str, parameters: Any = ()) -> _LibsqlCursor:
+        return _LibsqlCursor(self._conn.execute(sql, parameters))
+
+    def executemany(self, sql: str, seq_of_parameters: Any) -> _LibsqlCursor:
+        return _LibsqlCursor(self._conn.executemany(sql, seq_of_parameters))
+
+    def executescript(self, script: str) -> Any:
+        return self._conn.executescript(script)
+
+    def cursor(self) -> Any:
+        # Unwrapped, raw cursor: this is what pandas.read_sql_query needs.
+        return self._conn.cursor()
+
+    def commit(self) -> None:
+        wrote = self._conn.in_transaction
+        self._conn.commit()
+        if wrote:
+            self._conn.sync()
+
+    def rollback(self) -> None:
+        self._conn.rollback()
+
+    def sync(self) -> None:
+        self._conn.sync()
+
+    def close(self) -> None:
+        self._conn.close()
+
 
 def utc_now() -> str:
     """Return a timezone-aware ISO timestamp."""
@@ -28,10 +202,27 @@ def utc_now() -> str:
 
 
 @contextmanager
-def connection() -> Iterator[sqlite3.Connection]:
-    """Open a SQLite connection with foreign keys and row access enabled."""
-    conn = sqlite3.connect(DATABASE_PATH, timeout=20)
-    conn.row_factory = sqlite3.Row
+def connection() -> Iterator[Any]:
+    """Open a database connection with foreign keys and row access enabled.
+
+    Uses a synced Turso (libSQL) embedded replica when credentials are
+    configured, otherwise the original local SQLite file. See the module
+    docstring for why this matters on Streamlit Community Cloud.
+    """
+    global _synced_once
+    if _USE_LIBSQL:
+        raw_conn = libsql.connect(
+            str(DATABASE_PATH), sync_url=_TURSO_URL, auth_token=_TURSO_TOKEN
+        )
+        if not _synced_once:
+            with _sync_lock:
+                if not _synced_once:
+                    raw_conn.sync()
+                    _synced_once = True
+        conn: Any = _LibsqlConnection(raw_conn)
+    else:
+        conn = sqlite3.connect(DATABASE_PATH, timeout=20)
+        conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
     try:
         yield conn
@@ -45,8 +236,19 @@ def connection() -> Iterator[sqlite3.Connection]:
 
 def initialise_database() -> None:
     """Create all tables and indexes if they do not yet exist."""
+    global _schema_ready
     for directory in (DATA_DIR, EXPORTS_DIR, LOGS_DIR):
         directory.mkdir(parents=True, exist_ok=True)
+
+    if _schema_ready:
+        # Every statement below is guarded with IF NOT EXISTS, so re-running
+        # this on every single Streamlit rerun (this function is called
+        # unconditionally at the top of main()) was always redundant. Now
+        # that a rerun can also mean a network sync (see connection()),
+        # skipping the repeat work after the first successful run matters
+        # more than it used to -- this changes no behaviour, since the
+        # schema itself is only ever created once either way.
+        return
 
     schema = """
     CREATE TABLE IF NOT EXISTS participants (
@@ -182,10 +384,18 @@ def initialise_database() -> None:
     with connection() as conn:
         conn.executescript(schema)
         _ensure_longitudinal_columns(conn)
+        if _USE_LIBSQL:
+            # DDL (CREATE TABLE/INDEX, ALTER TABLE) doesn't set
+            # in_transaction, so the ordinary commit-triggered sync in
+            # _LibsqlConnection.commit() wouldn't push it. Do it explicitly
+            # here, once, so a brand-new Turso database ends up with the
+            # schema on the remote primary too, not just this local replica.
+            conn.sync()
     _sync_master_exports()
+    _schema_ready = True
 
 
-def _ensure_longitudinal_columns(conn: sqlite3.Connection) -> None:
+def _ensure_longitudinal_columns(conn: Any) -> None:
     """Add participant-specific longitudinal keys to existing databases."""
     required_columns = {
         "assessments": {
@@ -231,7 +441,7 @@ def _sync_master_exports() -> None:
 
 
 def _longitudinal_context(
-    conn: sqlite3.Connection, participant_id: str, submitted_at: str
+    conn: Any, participant_id: str, submitted_at: str
 ) -> dict[str, Any]:
     participant = conn.execute(
         "SELECT enrolled_at FROM participants WHERE participant_id = ?", (participant_id,)
@@ -556,4 +766,3 @@ def study_summary(participant_id: str) -> dict[str, Any]:
         "missing": max(total_expected - len(assessments), 0),
         "wearable": latest,
     }
-
