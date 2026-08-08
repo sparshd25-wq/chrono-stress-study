@@ -220,12 +220,24 @@ class _LibsqlConnection:
     def cursor(self) -> Any:
         # Unwrapped, raw cursor: this is what pandas.read_sql_query needs.
         return self._conn.cursor()
-
     def commit(self) -> None:
-        wrote = self._conn.in_transaction
-        self._conn.commit()
-        if wrote:
-            self._conn.sync()
+-        wrote = self._conn.in_transaction
+-        self._conn.commit()
+-        if wrote:
+-            self._conn.sync()
++        # Some libsql drivers expose 'in_transaction' as an attribute,
++        # others may not. Use getattr to avoid an AttributeError that
++        # would abort the commit process and break registration.
++        wrote = getattr(self._conn, "in_transaction", False)
++        self._conn.commit()
++        if wrote:
++            try:
++                self._conn.sync()
++            except Exception as exc:
++                # Surface a clear runtime error (rather than an AttributeError
++                # or a redacted exception) so the app/maintainer sees the real
++                # sync problem and we don't silently block registration.
++                raise RuntimeError(f"Turso sync failed ({type(exc).__name__}: {exc})") from exc
 
     def rollback(self) -> None:
         self._conn.rollback()
