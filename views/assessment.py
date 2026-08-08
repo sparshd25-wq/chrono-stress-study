@@ -710,8 +710,8 @@ def render_scales() -> None:
         '<div class="stress-anchors">'
         + "".join(
             (
-                f'<div class="stress-anchor {"active" if value == stress_score else ""}'>
-                f"<span>{value}</span>{STRESS_LABELS[value]}</div>"
+                f'<div class="stress-anchor {"active" if value == stress_score else ""}">'
+                f'<span>{value}</span>{STRESS_LABELS[value]}</div>'
             )
             for value in range(1, 8)
         )
