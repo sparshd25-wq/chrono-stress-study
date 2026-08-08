@@ -107,7 +107,11 @@ def main() -> None:
         layout="wide",
         initial_sidebar_state="auto",
     )
-    initialise_database()
+    try:
+        initialise_database()
+    except RuntimeError as exc:
+        st.error(str(exc))
+        st.stop()
     initialise_session()
     load_css()
 
