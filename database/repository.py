@@ -84,6 +84,15 @@ _sync_lock = threading.Lock()
 _synced_once = False
 _schema_ready = False
 
+# The embedded replica needs a file libsql itself creates and manages
+# (it keeps replica metadata alongside it) -- it must never be the same
+# path the plain-sqlite3 fallback might have written a bare SQLite file
+# to, or libsql refuses to open it ("db file exists but metadata file
+# does not").
+_REPLICA_PATH = DATABASE_PATH.with_name(
+    f"{DATABASE_PATH.stem}_turso_replica{DATABASE_PATH.suffix}"
+)
+
 
 def _turso_status() -> tuple[str | None, str | None, bool]:
     """Resolve Turso credentials fresh on every call instead of caching
@@ -245,9 +254,28 @@ def connection() -> Iterator[Any]:
     turso_url, turso_token, use_libsql = _turso_status()
     if use_libsql:
         try:
-            raw_conn = libsql.connect(
-                str(DATABASE_PATH), sync_url=turso_url, auth_token=turso_token
-            )
+            try:
+                raw_conn = libsql.connect(
+                    str(_REPLICA_PATH), sync_url=turso_url, auth_token=turso_token
+                )
+            except ValueError as exc:
+                # A local replica file in a state libsql won't open (e.g.
+                # left over from an interrupted sync, or -- the specific
+                # case that motivated this -- a bare file that isn't in
+                # libsql's replica format at all) is safe to discard and
+                # recreate: it's disposable local cache, not the durable
+                # copy. Turso itself is the source of truth, so clearing
+                # this and re-syncing from there loses nothing. Retried
+                # exactly once, so a real, different problem still surfaces.
+                if "invalid local state" in str(exc) and _REPLICA_PATH.exists():
+                    _REPLICA_PATH.unlink()
+                    for stale in _REPLICA_PATH.parent.glob(f"{_REPLICA_PATH.name}-*"):
+                        stale.unlink(missing_ok=True)
+                    raw_conn = libsql.connect(
+                        str(_REPLICA_PATH), sync_url=turso_url, auth_token=turso_token
+                    )
+                else:
+                    raise
             if not _synced_once:
                 with _sync_lock:
                     if not _synced_once:
