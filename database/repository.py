@@ -1,3 +1,4 @@
+# repository.py (updated)
 """SQLite / Turso (libSQL) persistence layer for study records.
 
 Streamlit Community Cloud gives each app an *ephemeral* local disk: the
@@ -207,40 +208,37 @@ class _LibsqlConnection:
 
     def __init__(self, raw_connection: Any) -> None:
         self._conn = raw_connection
+        self._dirty = False  # track whether any write occurred
 
     def execute(self, sql: str, parameters: Any = ()) -> _LibsqlCursor:
+        # Mark dirty for INSERT/UPDATE/DELETE, but not SELECT
+        if sql.lstrip().upper().startswith(("INSERT", "UPDATE", "DELETE", "CREATE", "ALTER", "DROP")):
+            self._dirty = True
         return _LibsqlCursor(self._conn.execute(sql, parameters))
 
     def executemany(self, sql: str, seq_of_parameters: Any) -> _LibsqlCursor:
+        if sql.lstrip().upper().startswith(("INSERT", "UPDATE", "DELETE", "CREATE", "ALTER", "DROP")):
+            self._dirty = True
         return _LibsqlCursor(self._conn.executemany(sql, seq_of_parameters))
 
     def executescript(self, script: str) -> Any:
+        # Assume script may contain writes
+        self._dirty = True
         return self._conn.executescript(script)
 
     def cursor(self) -> Any:
         # Unwrapped, raw cursor: this is what pandas.read_sql_query needs.
         return self._conn.cursor()
+
     def commit(self) -> None:
--        wrote = self._conn.in_transaction
--        self._conn.commit()
--        if wrote:
--            self._conn.sync()
-+        # Some libsql drivers expose 'in_transaction' as an attribute,
-+        # others may not. Use getattr to avoid an AttributeError that
-+        # would abort the commit process and break registration.
-+        wrote = getattr(self._conn, "in_transaction", False)
-+        self._conn.commit()
-+        if wrote:
-+            try:
-+                self._conn.sync()
-+            except Exception as exc:
-+                # Surface a clear runtime error (rather than an AttributeError
-+                # or a redacted exception) so the app/maintainer sees the real
-+                # sync problem and we don't silently block registration.
-+                raise RuntimeError(f"Turso sync failed ({type(exc).__name__}: {exc})") from exc
+        self._conn.commit()
+        if self._dirty:
+            self._conn.sync()
+            self._dirty = False
 
     def rollback(self) -> None:
         self._conn.rollback()
+        self._dirty = False
 
     def sync(self) -> None:
         self._conn.sync()
