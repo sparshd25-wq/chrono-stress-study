@@ -5,7 +5,7 @@ from __future__ import annotations
 import streamlit as st
 
 from components.ui import load_css
-from database.repository import get_participant, initialise_database
+from database.repository import get_participant, initialise_database, turso_diagnostics
 from views.assessment import cancel_assessment, render_assessment
 from views.auth import render_authentication
 from views.dashboard import (
@@ -93,6 +93,11 @@ def render_sidebar() -> str:
         st.divider()
         if role == "admin":
             st.caption(f"SIGNED IN AS ADMIN\n\n{st.session_state.get('admin_username')}")
+            diagnostics = turso_diagnostics()
+            if diagnostics["using_turso"]:
+                st.caption(f"🟢 Storage: Turso (synced) — {diagnostics.get('participant_count', '?')} participants")
+            else:
+                st.caption("🟡 Storage: local SQLite (not persistent on Cloud)")
         else:
             st.caption(f"SIGNED IN AS\n\n{st.session_state.authenticated_participant_id}")
         if st.button("Sign out", use_container_width=True):
