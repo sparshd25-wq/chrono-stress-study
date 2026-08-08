@@ -19,7 +19,18 @@ comes back with every existing participant intact.
 
 Without those credentials configured (e.g. local development), this
 module falls back to the original local SQLite file, completely
-unchanged -- nothing about local development changes.
+unchanged -- nothing about local development changes. On Streamlit
+Community Cloud specifically, falling back silently would mean quietly
+losing data, so ``initialise_database()`` refuses to start instead --
+see ``_running_on_streamlit_cloud()`` below.
+
+This uses Turso's ``libsql`` package (``pip install libsql``), the
+actively maintained successor to the now-deprecated
+``libsql_experimental`` package: same connect()/execute()/sync() API,
+still installed as the ``libsql`` module, but with prebuilt wheels for
+current Python versions -- including the one Streamlit Community Cloud
+now builds against, which is why the old package started failing to
+install.
 """
 
 from __future__ import annotations
@@ -45,7 +56,7 @@ from config import (
 )
 
 try:
-    import libsql_experimental as libsql
+    import libsql
 except ImportError:  # pragma: no cover - optional dependency
     libsql = None
 
@@ -78,10 +89,23 @@ _synced_once = False
 _schema_ready = False
 
 
+def _running_on_streamlit_cloud() -> bool:
+    """Best-effort detection of Streamlit Community Cloud, which clones
+    every app to ``/mount/src/<repo>`` before running it. Set the
+    ``CHRONOSTRESS_REQUIRE_TURSO`` secret/environment variable to
+    ``true``/``false`` to override this in either direction (e.g. to get
+    the same no-silent-fallback guarantee on another host, or to relax it
+    while debugging on Community Cloud itself)."""
+    override = _read_secret("CHRONOSTRESS_REQUIRE_TURSO")
+    if override is not None:
+        return override.strip().lower() in {"1", "true", "yes"}
+    return str(BASE_DIR).startswith("/mount/src")
+
+
 class _Row:
     """Mapping-style row -- supports ``row["col"]``, ``row[0]``, and
     ``dict(row)`` -- matching ``sqlite3.Row`` behaviour for result tuples
-    returned by libsql_experimental, which has no row_factory of its own."""
+    returned by libsql, which has no row_factory of its own."""
 
     __slots__ = ("_columns", "_values")
 
@@ -108,8 +132,8 @@ class _Row:
 
 
 class _LibsqlCursor:
-    """Wraps a libsql_experimental cursor so fetched rows support the same
-    dict-style access as sqlite3.Row-backed cursors do."""
+    """Wraps a libsql cursor so fetched rows support the same dict-style
+    access as sqlite3.Row-backed cursors do."""
 
     def __init__(self, cursor: Any) -> None:
         self._cursor = cursor
@@ -150,7 +174,7 @@ class _LibsqlCursor:
 
 
 class _LibsqlConnection:
-    """Adapts a libsql_experimental Connection (a local embedded replica of
+    """Adapts a libsql Connection (a local embedded replica of
     the remote Turso database) to the subset of the sqlite3.Connection
     interface this repository relies on: dict-style row access via
     execute()/fetchone()/fetchall(), executemany, executescript, and a
@@ -234,9 +258,56 @@ def connection() -> Iterator[Any]:
         conn.close()
 
 
+def turso_diagnostics() -> dict[str, Any]:
+    """Non-secret status snapshot for an admin-only diagnostic view --
+    never returns the database URL or auth token themselves, only
+    whether they were detected and whether the connection actually works.
+
+    Wire this into an admin page, e.g.::
+
+        st.json(turso_diagnostics())
+    """
+    info: dict[str, Any] = {
+        "turso_credentials_detected": bool(_TURSO_URL and _TURSO_TOKEN),
+        "libsql_driver_loaded": libsql is not None,
+        "using_turso": _USE_LIBSQL,
+        "mode": "Turso (libSQL embedded replica)" if _USE_LIBSQL else "Local SQLite",
+        "detected_as_streamlit_cloud": _running_on_streamlit_cloud(),
+    }
+    if _USE_LIBSQL:
+        try:
+            with connection() as conn:
+                info["participant_count"] = conn.execute(
+                    "SELECT COUNT(*) FROM participants"
+                ).fetchone()[0]
+                info["assessment_count"] = conn.execute(
+                    "SELECT COUNT(*) FROM assessments"
+                ).fetchone()[0]
+            info["connection_ok"] = True
+        except Exception as exc:  # pragma: no cover - diagnostic path only
+            info["connection_ok"] = False
+            info["error"] = str(exc)
+    return info
+
+
 def initialise_database() -> None:
     """Create all tables and indexes if they do not yet exist."""
     global _schema_ready
+    if not _USE_LIBSQL and _running_on_streamlit_cloud():
+        missing = []
+        if not (_TURSO_URL and _TURSO_TOKEN):
+            missing.append("TURSO_DATABASE_URL / TURSO_AUTH_TOKEN secrets")
+        if libsql is None:
+            missing.append("the libsql package (check requirements.txt / the build log)")
+        raise RuntimeError(
+            "ChronoStress is running on Streamlit Community Cloud without a "
+            "working Turso connection (missing: " + "; ".join(missing) + "). "
+            "Refusing to fall back to local SQLite here, since that storage "
+            "is wiped on every sleep/restart and participant data would be "
+            "silently lost. Add TURSO_DATABASE_URL and TURSO_AUTH_TOKEN in "
+            "the app's Secrets, or set CHRONOSTRESS_REQUIRE_TURSO=false if "
+            "ephemeral storage is genuinely intended here."
+        )
     for directory in (DATA_DIR, EXPORTS_DIR, LOGS_DIR):
         directory.mkdir(parents=True, exist_ok=True)
 
