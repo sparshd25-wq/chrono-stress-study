@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import date, datetime
 from zoneinfo import ZoneInfo
 
 import pandas as pd
@@ -9,7 +10,7 @@ import streamlit as st
 
 from components.ui import banner, section_heading, wearable_status
 from config import DAILY_ASSESSMENT_TARGET
-from database.repository import all_study_frames, participant_frames, study_summary
+from database.repository import all_study_frames, dataframe, get_participant, participant_frames
 from utils.analytics import (
     add_derived_assessment_metrics,
     correlation_chart,
@@ -81,9 +82,33 @@ def _latest_value(latest: dict, key: str, suffix: str = "", fallback: str = "--"
 
 
 def render_dashboard(participant_id: str) -> None:
-    summary = study_summary(participant_id)
-    frames = participant_frames(participant_id)
-    latest = summary.get("wearable", {})
+    participant = st.session_state.get("participant_record") or get_participant(participant_id)
+    assessments = dataframe(
+        "SELECT * FROM assessments WHERE participant_id = ? ORDER BY submitted_at",
+        (participant_id,),
+    )
+    wearable = dataframe(
+        "SELECT * FROM wearable_data WHERE participant_id = ? ORDER BY recorded_at",
+        (participant_id,),
+    )
+    enrolled = datetime.fromisoformat(participant["enrolled_at"]).date()
+    study_day = min((date.today() - enrolled).days + 1, participant["study_days"])
+    total_expected = participant["study_days"] * DAILY_ASSESSMENT_TARGET
+    completion = min(100.0, len(assessments) / total_expected * 100)
+    today_count = 0
+    if not assessments.empty:
+        submitted = pd.to_datetime(assessments["submitted_at"], utc=True)
+        today_count = int((submitted.dt.date == date.today()).sum())
+    latest = wearable.iloc[-1].to_dict() if not wearable.empty else {}
+    summary = {
+        "study_day": study_day,
+        "study_days": participant["study_days"],
+        "assessment_count": len(assessments),
+        "today_count": today_count,
+        "completion": completion,
+        "missing": max(total_expected - len(assessments), 0),
+        "wearable": latest,
+    }
     banner(
         f"Study day {summary['study_day']} of {summary['study_days']}",
         "Your daily measures help build a picture of stress and time perception across everyday life.",
@@ -122,7 +147,6 @@ def render_dashboard(participant_id: str) -> None:
     metrics[4].metric("Resting HR", _latest_value(latest, "resting_hr", " bpm"))
 
     chart_left, chart_right = st.columns([3, 2])
-    wearable = frames["wearable"]
     with chart_left:
         st.markdown("#### Physiology trend")
         if not wearable.empty:
@@ -137,7 +161,6 @@ def render_dashboard(participant_id: str) -> None:
         st.caption("Today, 7:30 PM • Notification schedule demonstration")
 
     st.markdown("#### Latest assessments")
-    assessments = frames["assessments"]
     if assessments.empty:
         st.info("Your completed assessments will appear here.")
     else:
