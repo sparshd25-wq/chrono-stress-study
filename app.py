@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import time
+
 import streamlit as st
 
 from components.ui import load_css
@@ -93,11 +95,16 @@ def render_sidebar() -> str:
         st.divider()
         if role == "admin":
             st.caption(f"SIGNED IN AS ADMIN\n\n{st.session_state.get('admin_username')}")
-            diagnostics = turso_diagnostics()
-            if diagnostics["using_turso"]:
-                st.caption(f"🟢 Storage: Turso (synced) — {diagnostics.get('participant_count', '?')} participants")
-            else:
-                st.caption("🟡 Storage: local SQLite (not persistent on Cloud)")
+            # Turso diagnostics (2 extra queries) are opt-in via a button
+            # rather than run unconditionally on every single rerun --
+            # while we're chasing "every click is slow", nothing that
+            # isn't essential to the page should run automatically.
+            if st.button("Check storage status", use_container_width=True):
+                diagnostics = turso_diagnostics()
+                if diagnostics["using_turso"]:
+                    st.caption(f"🟢 Turso (synced) — {diagnostics.get('participant_count', '?')} participants")
+                else:
+                    st.caption("🟡 Local SQLite (not persistent on Cloud)")
         else:
             st.caption(f"SIGNED IN AS\n\n{st.session_state.authenticated_participant_id}")
         if st.button("Sign out", use_container_width=True):
@@ -112,21 +119,37 @@ def main() -> None:
         layout="wide",
         initial_sidebar_state="auto",
     )
+
+    # Timing instrumentation: prints to Streamlit Cloud's logs (Manage
+    # app -> logs) so a slow rerun's actual bottleneck is visible
+    # directly instead of guessed at. Pure print() calls -- no UI,
+    # layout, or behavior changes.
+    _t_start = time.perf_counter()
+
+    def _lap(label: str) -> None:
+        print(f"[ChronoStress TIMING] {label}: {time.perf_counter() - _t_start:.3f}s elapsed")
+
     try:
         initialise_database()
     except RuntimeError as exc:
         st.error(str(exc))
         st.stop()
+    _lap("initialise_database")
+
     initialise_session()
     load_css()
+    _lap("initialise_session + load_css")
 
     role, participant_id = authenticated_identity()
+    _lap("authenticated_identity")
     if role is None:
         st.session_state.authenticated = False
         render_authentication()
+        _lap("render_authentication (TOTAL)")
         return
 
     page = render_sidebar()
+    _lap("render_sidebar")
     if role == "participant" and page in {
         "Analytics",
         "Data Export",
@@ -154,6 +177,7 @@ def main() -> None:
         render_raw_events()
     else:
         render_protocol()
+    _lap(f"render page={page!r} (TOTAL)")
 
 
 if __name__ == "__main__":
