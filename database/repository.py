@@ -47,6 +47,7 @@ import numpy as np
 import pandas as pd
 
 from config import (
+    BASE_DIR,
     DAILY_ASSESSMENT_TARGET,
     DATA_DIR,
     DATABASE_PATH,
@@ -190,6 +191,41 @@ class _LibsqlCursor:
         return getattr(self._cursor, "rowcount", -1)
 
 
+_SYNC_TIMEOUT_SECONDS = 15
+
+
+def _sync_with_timeout(raw_conn: Any) -> None:
+    """Run raw_conn.sync() with a hard wall-clock timeout.
+
+    The libsql driver's sync() blocks on a network round trip to Turso
+    and exposes no timeout parameter of its own -- if Turso is slow or
+    unreachable, an unbounded sync() call hangs the whole Streamlit
+    script with no error and no feedback, which is indistinguishable
+    from the app simply being broken. Running it on a daemon thread and
+    bounding how long we wait turns that silent hang into a clear,
+    visible error instead. The native call can't be cancelled once
+    started -- the thread is abandoned, not killed -- but it's a daemon
+    thread, so it never blocks this call's return or the process
+    exiting; it only matters for the one stalled request.
+    """
+    result: dict[str, Any] = {}
+
+    def _run() -> None:
+        try:
+            raw_conn.sync()
+            result["ok"] = True
+        except Exception as exc:  # noqa: BLE001 - relayed to the caller below
+            result["error"] = exc
+
+    worker = threading.Thread(target=_run, daemon=True)
+    worker.start()
+    worker.join(timeout=_SYNC_TIMEOUT_SECONDS)
+    if worker.is_alive():
+        raise TimeoutError(f"Turso did not respond within {_SYNC_TIMEOUT_SECONDS}s")
+    if "error" in result:
+        raise result["error"]
+
+
 class _LibsqlConnection:
     """Adapts a libsql Connection (a local embedded replica of
     the remote Turso database) to the subset of the sqlite3.Connection
@@ -222,23 +258,16 @@ class _LibsqlConnection:
         return self._conn.cursor()
 
     def commit(self) -> None:
--        wrote = self._conn.in_transaction
--        self._conn.commit()
--        if wrote:
--            self._conn.sync()
-+        wrote = self._conn.in_transaction
-+        print(f"[ChronoStress][DB] _LibsqlConnection.commit() wrote={wrote}")
-+        self._conn.commit()
-+        if wrote:
-+            print("[ChronoStress][DB] _LibsqlConnection.commit() triggering sync() to Turso")
-+            self._conn.sync()
-+            print("[ChronoStress][DB] _LibsqlConnection.commit() sync() complete")
+        wrote = self._conn.in_transaction
+        self._conn.commit()
+        if wrote:
+            _sync_with_timeout(self._conn)
 
     def rollback(self) -> None:
         self._conn.rollback()
 
     def sync(self) -> None:
-        self._conn.sync()
+        _sync_with_timeout(self._conn)
 
     def close(self) -> None:
         self._conn.close()
@@ -249,6 +278,29 @@ def utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _open_libsql_replica(turso_url: str, turso_token: str) -> Any:
+    """Open the embedded replica, self-healing exactly one specific,
+    known-safe failure: a local replica file libsql won't open because
+    it's not in libsql's own format (see _REPLICA_PATH above) or was
+    left mid-sync. That file is disposable local cache -- Turso is the
+    source of truth -- so discarding it and letting libsql recreate it
+    from a fresh sync loses nothing. Any other error is left to the
+    caller, which turns it into a clear on-screen message."""
+    try:
+        return libsql.connect(
+            str(_REPLICA_PATH), sync_url=turso_url, auth_token=turso_token
+        )
+    except ValueError as exc:
+        if "invalid local state" in str(exc) and _REPLICA_PATH.exists():
+            _REPLICA_PATH.unlink()
+            for stale in _REPLICA_PATH.parent.glob(f"{_REPLICA_PATH.name}-*"):
+                stale.unlink(missing_ok=True)
+            return libsql.connect(
+                str(_REPLICA_PATH), sync_url=turso_url, auth_token=turso_token
+            )
+        raise
+
+
 @contextmanager
 def connection() -> Iterator[Any]:
     """Open a database connection with foreign keys and row access enabled.
@@ -256,82 +308,60 @@ def connection() -> Iterator[Any]:
     Uses a synced Turso (libSQL) embedded replica when credentials are
     configured, otherwise the original local SQLite file. See the module
     docstring for why this matters on Streamlit Community Cloud.
+
+    Every Turso operation for the connection's whole lifetime -- opening
+    it, the caller's queries, and the final commit's sync -- is covered
+    by one error path: any failure becomes a RuntimeError with the real
+    (secret-scrubbed) message attached, instead of an unhandled
+    exception that Streamlit Cloud would otherwise blank out as
+    "redacted to prevent data leaks". A prior version of this function
+    only wrapped the initial connect this way, so a failure specifically
+    during the write-time sync (e.g. a registration's INSERT) still fell
+    through to that generic redaction -- this closes that gap.
     """
     global _synced_once
     turso_url, turso_token, use_libsql = _turso_status()
-    if use_libsql:
-        try:
-            try:
-                raw_conn = libsql.connect(
-                    str(_REPLICA_PATH), sync_url=turso_url, auth_token=turso_token
-                )
-            except ValueError as exc:
-                # A local replica file in a state libsql won't open (e.g.
-                # left over from an interrupted sync, or -- the specific
-                # case that motivated this -- a bare file that isn't in
-                # libsql's replica format at all) is safe to discard and
-                # recreate: it's disposable local cache, not the durable
-                # copy. Turso itself is the source of truth, so clearing
-                # this and re-syncing from there loses nothing. Retried
-                # exactly once, so a real, different problem still surfaces.
-                if "invalid local state" in str(exc) and _REPLICA_PATH.exists():
-                    _REPLICA_PATH.unlink()
-                    for stale in _REPLICA_PATH.parent.glob(f"{_REPLICA_PATH.name}-*"):
-                        stale.unlink(missing_ok=True)
-                    raw_conn = libsql.connect(
-                        str(_REPLICA_PATH), sync_url=turso_url, auth_token=turso_token
-                    )
-                else:
-                    raise
+    conn: Any = None
+    try:
+        if use_libsql:
+            raw_conn = _open_libsql_replica(turso_url, turso_token)
             if not _synced_once:
                 with _sync_lock:
                     if not _synced_once:
-                        raw_conn.sync()
+                        _sync_with_timeout(raw_conn)
                         _synced_once = True
-        except Exception as exc:
-            # Streamlit Cloud redacts every uncaught exception that
-            # reaches it, replacing the message with a generic "redacted
-            # to prevent data leaks" notice -- which hides exactly the
-            # detail needed to fix a Turso connection problem. Catching
-            # it here and re-raising as RuntimeError routes it through
-            # app.py's explicit handler instead, which shows it via
-            # st.error() and bypasses that blanket redaction. The raw
-            # URL/token are stripped from the text first regardless, as
-            # a precaution, even though they don't typically appear in
-            # these error messages.
+            conn = _LibsqlConnection(raw_conn)
+        else:
+            conn = sqlite3.connect(DATABASE_PATH, timeout=20)
+            conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA foreign_keys = ON")
+        yield conn
+        conn.commit()
+    except Exception as exc:
+        if conn is not None:
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+        if use_libsql and not isinstance(exc, RuntimeError):
+            # See the module-level note above on why this re-raise
+            # exists: it's what makes the real error visible instead of
+            # Streamlit Cloud's blanket redaction.
             detail = str(exc)
             if turso_url:
                 detail = detail.replace(turso_url, "<TURSO_DATABASE_URL>")
             if turso_token:
                 detail = detail.replace(turso_token, "<TURSO_AUTH_TOKEN>")
             raise RuntimeError(
-                f"Could not connect to Turso ({type(exc).__name__}: {detail}). "
-                "Check that TURSO_DATABASE_URL starts with libsql:// "
-                "(not https://) and that TURSO_AUTH_TOKEN is current, "
-                "in the app's Secrets."
+                f"Turso operation failed ({type(exc).__name__}: {detail}). "
+                "Check TURSO_DATABASE_URL (starts with libsql://, not "
+                "https://) and TURSO_AUTH_TOKEN in the app's Secrets, and "
+                "that the Turso database is reachable."
             ) from exc
-        conn: Any = _LibsqlConnection(raw_conn)
-    else:
-        conn = sqlite3.connect(DATABASE_PATH, timeout=20)
-        conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA foreign_keys = ON")
-    try:
--        yield conn
--        conn.commit()
-+        print("[ChronoStress][DB] connection() opened; yielding connection")
-+        yield conn
-+        print("[ChronoStress][DB] connection() context exiting: committing")
-+        conn.commit()
-    except Exception:
--        conn.rollback()
--        raise
-+        print("[ChronoStress][DB] connection() caught exception: rolling back")
-+        conn.rollback()
-+        raise
+        raise
     finally:
--        conn.close()
-+        print("[ChronoStress][DB] connection() closing")
-+        conn.close()
+        if conn is not None:
+            conn.close()
 
 
 def turso_diagnostics() -> dict[str, Any]:
