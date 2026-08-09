@@ -301,6 +301,9 @@ def _open_libsql_replica(turso_url: str, turso_token: str) -> Any:
         raise
 
 
+_thread_local = threading.local()
+
+
 @contextmanager
 def connection() -> Iterator[Any]:
     """Open a database connection with foreign keys and row access enabled.
@@ -308,6 +311,18 @@ def connection() -> Iterator[Any]:
     Uses a synced Turso (libSQL) embedded replica when credentials are
     configured, otherwise the original local SQLite file. See the module
     docstring for why this matters on Streamlit Community Cloud.
+
+    The libSQL connection is opened once per thread and reused for every
+    subsequent call on that thread, rather than reopened on every single
+    query. Streamlit gives each active session its own thread and reruns
+    the whole script on every interaction -- read-only lookups like
+    get_participant() fire on nearly every rerun, including during timed
+    game trials -- so repeatedly paying the embedded-replica's local-file
+    setup cost per query was adding real, felt latency everywhere, not
+    just registration. Reuse is thread-local, so concurrent sessions
+    never share a connection and nothing here needs a lock. If a cached
+    connection ever errors, it's dropped so the next call opens a fresh
+    one instead of failing repeatedly on the same broken connection.
 
     Every Turso operation for the connection's whole lifetime -- opening
     it, the caller's queries, and the final commit's sync -- is covered
@@ -324,12 +339,15 @@ def connection() -> Iterator[Any]:
     conn: Any = None
     try:
         if use_libsql:
-            raw_conn = _open_libsql_replica(turso_url, turso_token)
-            if not _synced_once:
-                with _sync_lock:
-                    if not _synced_once:
-                        _sync_with_timeout(raw_conn)
-                        _synced_once = True
+            raw_conn = getattr(_thread_local, "raw_conn", None)
+            if raw_conn is None:
+                raw_conn = _open_libsql_replica(turso_url, turso_token)
+                if not _synced_once:
+                    with _sync_lock:
+                        if not _synced_once:
+                            _sync_with_timeout(raw_conn)
+                            _synced_once = True
+                _thread_local.raw_conn = raw_conn
             conn = _LibsqlConnection(raw_conn)
         else:
             conn = sqlite3.connect(DATABASE_PATH, timeout=20)
@@ -343,10 +361,15 @@ def connection() -> Iterator[Any]:
                 conn.rollback()
             except Exception:
                 pass
+        if use_libsql:
+            # The cached connection may be the thing that just broke --
+            # drop it so the next call opens a fresh one instead of
+            # repeatedly failing on the same bad connection.
+            _thread_local.raw_conn = None
         if use_libsql and not isinstance(exc, RuntimeError):
-            # See the module-level note above on why this re-raise
-            # exists: it's what makes the real error visible instead of
-            # Streamlit Cloud's blanket redaction.
+            # See the docstring above on why this re-raise exists: it's
+            # what makes the real error visible instead of Streamlit
+            # Cloud's blanket redaction.
             detail = str(exc)
             if turso_url:
                 detail = detail.replace(turso_url, "<TURSO_DATABASE_URL>")
@@ -360,7 +383,10 @@ def connection() -> Iterator[Any]:
             ) from exc
         raise
     finally:
-        if conn is not None:
+        # The libsql connection is cached and reused (see above) -- only
+        # the plain-sqlite fallback connection is opened fresh per call,
+        # so only it gets closed here.
+        if conn is not None and not use_libsql:
             conn.close()
 
 
