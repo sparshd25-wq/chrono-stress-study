@@ -165,26 +165,30 @@ def render_registration() -> None:
             for error in errors:
                 st.error(error)
             return
-        create_participant(
-            {
-                "participant_id": participant_id,
-                "access_code_hash": hash_access_code(access_code),
-                "age": age,
-                "gender": gender,
-                "occupation": occupation.strip(),
-                "academic_status": academic_status,
-                "medication": medication.strip() or "None reported",
-                "sleep_disorders": sleep_disorders,
-                "mental_health_diagnosis": diagnosis.strip() or None,
-                "coffee_per_day": coffee,
-                "smoking": smoking,
-                "alcohol": alcohol,
-                "average_sleep_hours": average_sleep,
-                "enrolled_at": datetime.now(timezone.utc).isoformat(),
-                "study_days": STUDY_DURATION_DAYS,
-            }
-        )
-        participant = get_participant(participant_id)
+        
+        # Create participant record in database once
+        participant_data = {
+            "participant_id": participant_id,
+            "access_code_hash": hash_access_code(access_code),
+            "age": age,
+            "gender": gender,
+            "occupation": occupation.strip(),
+            "academic_status": academic_status,
+            "medication": medication.strip() or "None reported",
+            "sleep_disorders": sleep_disorders,
+            "mental_health_diagnosis": diagnosis.strip() or None,
+            "coffee_per_day": coffee,
+            "smoking": smoking,
+            "alcohol": alcohol,
+            "average_sleep_hours": average_sleep,
+            "enrolled_at": datetime.now(timezone.utc).isoformat(),
+            "study_days": STUDY_DURATION_DAYS,
+        }
+        create_participant(participant_data)
+        
+        # Construct participant object to match database schema without re-querying
+        participant = dict(participant_data)
+        
         save_consent(participant_id)
         DemoWearableProvider().sync(participant_id)
         _sign_in(participant)
@@ -207,26 +211,29 @@ def render_login() -> None:
             if not re.fullmatch(r"[A-Z0-9-]{4,20}", participant_id) or len(access_code) < 6:
                 st.error("Invalid Participant ID or Access Code.")
                 return
-            create_participant(
-                {
-                    "participant_id": participant_id,
-                    "access_code_hash": hash_access_code(access_code),
-                    "age": 18,
-                    "gender": "Prefer not to say",
-                    "occupation": "Not collected",
-                    "academic_status": "Other",
-                    "medication": "Not collected",
-                    "sleep_disorders": "Prefer not to say",
-                    "mental_health_diagnosis": None,
-                    "coffee_per_day": 0,
-                    "smoking": "Prefer not to say",
-                    "alcohol": "Prefer not to say",
-                    "average_sleep_hours": 7.0,
-                    "enrolled_at": datetime.now(timezone.utc).isoformat(),
-                    "study_days": STUDY_DURATION_DAYS,
-                }
-            )
-            participant = get_participant(participant_id)
+            
+            # Create participant record in database once
+            participant_data = {
+                "participant_id": participant_id,
+                "access_code_hash": hash_access_code(access_code),
+                "age": 18,
+                "gender": "Prefer not to say",
+                "occupation": "Not collected",
+                "academic_status": "Other",
+                "medication": "Not collected",
+                "sleep_disorders": "Prefer not to say",
+                "mental_health_diagnosis": None,
+                "coffee_per_day": 0,
+                "smoking": "Prefer not to say",
+                "alcohol": "Prefer not to say",
+                "average_sleep_hours": 7.0,
+                "enrolled_at": datetime.now(timezone.utc).isoformat(),
+                "study_days": STUDY_DURATION_DAYS,
+            }
+            create_participant(participant_data)
+            
+            # Construct participant object to match database schema without re-querying
+            participant = dict(participant_data)
         elif not verify_access_code(access_code, participant["access_code_hash"]):
             st.error("Invalid Participant ID or Access Code.")
             return
