@@ -781,7 +781,13 @@ def save_assessment(
     cognitive: dict[str, Any],
     assessment_metadata: dict[str, Any] | None = None,
 ) -> int:
-    """Atomically save an assessment and all behavioural results."""
+    """Atomically save an assessment and all behavioural results.
+    
+    The assessment transaction (4 table writes) commits successfully to Turso
+    before this function returns. Master CSV export regeneration is deferred
+    to the admin Data Export page for researcher/analytics use, not performed
+    synchronously here to optimize participant submission latency.
+    """
     if not participant_id:
         raise ValueError("Assessment cannot be saved without a participant_id.")
     assessment_fields = (
@@ -796,9 +802,9 @@ def save_assessment(
         context = _longitudinal_context(conn, participant_id, submitted_at)
         cursor = conn.execute(
             f"""INSERT INTO assessments
-                (participant_id, assessment_uid, day_number, prompt_number,
-                 started_at, submitted_at, {', '.join(assessment_fields)})
-                VALUES (?, ?, ?, ?, ?, ?, {', '.join('?' for _ in assessment_fields)})""",
+                 (participant_id, assessment_uid, day_number, prompt_number,
+                  started_at, submitted_at, {', '.join(assessment_fields)})
+                 VALUES (?, ?, ?, ?, ?, ?, {', '.join('?' for _ in assessment_fields)})""",
             [
                 participant_id,
                 context["assessment_uid"],
@@ -876,12 +882,14 @@ def save_assessment(
             }
             conn.execute(
                 f"""INSERT OR REPLACE INTO assessment_metadata
-                    (assessment_id, participant_id, {', '.join(metadata_fields)})
-                    VALUES (?, ?, {', '.join('?' for _ in metadata_fields)})""",
+                     (assessment_id, participant_id, {', '.join(metadata_fields)})
+                     VALUES (?, ?, {', '.join('?' for _ in metadata_fields)})""",
                 [assessment_id, participant_id]
                 + [metadata_payload.get(field) for field in metadata_fields],
             )
-    _sync_master_exports()
+    # Transaction has committed and synced to Turso. Return assessment_id.
+    # CSV export regeneration is not needed here; it happens on-demand in
+    # the admin Data Export page (render_export in views/dashboard.py).
     return assessment_id
 
 
