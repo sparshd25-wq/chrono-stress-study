@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sys
 import time
 
 import streamlit as st
@@ -53,13 +54,22 @@ def authenticated_identity() -> tuple[str | None, str | None]:
     participant_id = st.session_state.get("authenticated_participant_id")
     if role != "participant" or not participant_id:
         return None, None
-    participant = get_participant(participant_id)
-    if participant is None:
-        for key in list(st.session_state):
-            del st.session_state[key]
-        return None, None
+    participant = st.session_state.get("participant_record")
+    if participant is None or participant.get("participant_id") != participant_id:
+        # Only reaches the database when the session doesn't already have
+        # a matching cached record -- normally just once, right after
+        # sign-in. This function runs unconditionally at the top of every
+        # single rerun for a signed-in participant, on every page, before
+        # any page-specific code -- re-querying identical, unchanging data
+        # (age, occupation, enrolled_at, etc.) on every click was the
+        # single most universal source of per-interaction lag in the app.
+        participant = get_participant(participant_id)
+        if participant is None:
+            for key in list(st.session_state):
+                del st.session_state[key]
+            return None, None
+        st.session_state.participant_record = participant
     st.session_state.participant_id = participant["participant_id"]
-    st.session_state.participant_record = participant
     return "participant", participant["participant_id"]
 
 
@@ -127,7 +137,11 @@ def main() -> None:
     _t_start = time.perf_counter()
 
     def _lap(label: str) -> None:
-        print(f"[ChronoStress TIMING] {label}: {time.perf_counter() - _t_start:.3f}s elapsed")
+        print(
+            f"[ChronoStress TIMING] {label}: {time.perf_counter() - _t_start:.3f}s elapsed",
+            file=sys.stderr,
+            flush=True,
+        )
 
     try:
         initialise_database()
