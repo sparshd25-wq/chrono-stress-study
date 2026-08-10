@@ -183,13 +183,11 @@ def render_registration() -> None:
             "enrolled_at": datetime.now(timezone.utc).isoformat(),
             "study_days": STUDY_DURATION_DAYS,
         }
-        create_participant(participant_data)
-        
-        # Construct participant object to match database schema without re-querying
+        # Persist participant + consent + initial demo wearable rows in ONE Turso commit.
+        create_participant_with_consent_and_wearable(participant_data)
+
+        # Reuse the submitted values instead of querying the database again.
         participant = dict(participant_data)
-        
-        save_consent(participant_id)
-        DemoWearableProvider().sync(participant_id)
         _sign_in(participant)
         st.rerun()
     if st.button("Back to consent"):
@@ -238,7 +236,7 @@ def render_login() -> None:
             return
 
         if participant:
-            # Authentication only. Wearable data was created during registration.
+            # Login is read-only. Do not perform wearable writes/syncs here.
             _sign_in(participant)
             st.rerun()
         st.error("Invalid Participant ID or Access Code.")
