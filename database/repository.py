@@ -193,7 +193,7 @@ class _LibsqlCursor:
         return getattr(self._cursor, "rowcount", -1)
 
 
-_SYNC_TIMEOUT_SECONDS = 15
+_SYNC_TIMEOUT_SECONDS = 8
 
 
 def _sync_with_timeout(raw_conn: Any) -> None:
@@ -1078,6 +1078,31 @@ def seed_mock_wearable(participant_id: str, days: int = STUDY_DURATION_DAYS) -> 
                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             rows,
         )
+
+
+def seed_mock_wearable_background(participant_id: str, days: int = STUDY_DURATION_DAYS) -> None:
+    """Kick off demo wearable seeding in a background thread instead of
+    making the caller wait on it.
+
+    This is deterministic MOCK data with zero research value -- unlike
+    the participant/consent/assessment writes, which stay fully
+    synchronous on purpose. Delaying it, or in the rare worst case
+    losing it (e.g. the process restarts before the background sync
+    reaches Turso), costs nothing real -- it just means the wearable
+    card is briefly empty until it's re-seeded. Registration's actual
+    research data (create_participant_with_consent) still blocks and
+    still confirms durability before the participant proceeds; only
+    this decorative part moves off that critical path.
+    """
+    def _run() -> None:
+        try:
+            seed_mock_wearable(participant_id, days)
+        except Exception:
+            # Best-effort only -- must never surface as a user-facing
+            # error for data that isn't real.
+            pass
+
+    threading.Thread(target=_run, daemon=True).start()
 
 
 def study_summary(participant_id: str) -> dict[str, Any]:
