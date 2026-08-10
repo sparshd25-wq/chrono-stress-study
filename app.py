@@ -2,13 +2,10 @@
 
 from __future__ import annotations
 
-import sys
-import time
-
 import streamlit as st
 
 from components.ui import load_css
-from database.repository import get_participant, initialise_database, turso_diagnostics
+from database.repository import get_participant, initialise_database
 from views.assessment import cancel_assessment, render_assessment
 from views.auth import render_authentication
 from views.dashboard import (
@@ -54,23 +51,21 @@ def authenticated_identity() -> tuple[str | None, str | None]:
     participant_id = st.session_state.get("authenticated_participant_id")
     if role != "participant" or not participant_id:
         return None, None
+
+    # Authentication already validated this participant and stored the full
+    # record in session state. Do not perform a second Turso/local-replica
+    # lookup on the rerun immediately after sign-in.
     participant = st.session_state.get("participant_record")
-    if participant is None or participant.get("participant_id") != participant_id:
-        # Only reaches the database when the session doesn't already have
-        # a matching cached record -- normally just once, right after
-        # sign-in. This function runs unconditionally at the top of every
-        # single rerun for a signed-in participant, on every page, before
-        # any page-specific code -- re-querying identical, unchanging data
-        # (age, occupation, enrolled_at, etc.) on every click was the
-        # single most universal source of per-interaction lag in the app.
+    if not participant or participant.get("participant_id") != participant_id:
         participant = get_participant(participant_id)
         if participant is None:
             for key in list(st.session_state):
                 del st.session_state[key]
             return None, None
         st.session_state.participant_record = participant
-    st.session_state.participant_id = participant["participant_id"]
-    return "participant", participant["participant_id"]
+
+    st.session_state.participant_id = participant_id
+    return "participant", participant_id
 
 
 def render_sidebar() -> str:
@@ -105,16 +100,6 @@ def render_sidebar() -> str:
         st.divider()
         if role == "admin":
             st.caption(f"SIGNED IN AS ADMIN\n\n{st.session_state.get('admin_username')}")
-            # Turso diagnostics (2 extra queries) are opt-in via a button
-            # rather than run unconditionally on every single rerun --
-            # while we're chasing "every click is slow", nothing that
-            # isn't essential to the page should run automatically.
-            if st.button("Check storage status", use_container_width=True):
-                diagnostics = turso_diagnostics()
-                if diagnostics["using_turso"]:
-                    st.caption(f"🟢 Turso (synced) — {diagnostics.get('participant_count', '?')} participants")
-                else:
-                    st.caption("🟡 Local SQLite (not persistent on Cloud)")
         else:
             st.caption(f"SIGNED IN AS\n\n{st.session_state.authenticated_participant_id}")
         if st.button("Sign out", use_container_width=True):
@@ -129,41 +114,17 @@ def main() -> None:
         layout="wide",
         initial_sidebar_state="auto",
     )
-
-    # Timing instrumentation: prints to Streamlit Cloud's logs (Manage
-    # app -> logs) so a slow rerun's actual bottleneck is visible
-    # directly instead of guessed at. Pure print() calls -- no UI,
-    # layout, or behavior changes.
-    _t_start = time.perf_counter()
-
-    def _lap(label: str) -> None:
-        print(
-            f"[ChronoStress TIMING] {label}: {time.perf_counter() - _t_start:.3f}s elapsed",
-            file=sys.stderr,
-            flush=True,
-        )
-
-    try:
-        initialise_database()
-    except RuntimeError as exc:
-        st.error(str(exc))
-        st.stop()
-    _lap("initialise_database")
-
+    initialise_database()
     initialise_session()
     load_css()
-    _lap("initialise_session + load_css")
 
     role, participant_id = authenticated_identity()
-    _lap("authenticated_identity")
     if role is None:
         st.session_state.authenticated = False
         render_authentication()
-        _lap("render_authentication (TOTAL)")
         return
 
     page = render_sidebar()
-    _lap("render_sidebar")
     if role == "participant" and page in {
         "Analytics",
         "Data Export",
@@ -191,7 +152,6 @@ def main() -> None:
         render_raw_events()
     else:
         render_protocol()
-    _lap(f"render page={page!r} (TOTAL)")
 
 
 if __name__ == "__main__":
