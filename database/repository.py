@@ -764,48 +764,8 @@ def save_consent(participant_id: str) -> None:
         )
 
 
-def _build_mock_wearable_rows(participant_id: str, days: int = STUDY_DURATION_DAYS) -> list[tuple[Any, ...]]:
-    """Build the same deterministic demo wearable rows without opening/committing a DB connection."""
-    seed = sum(ord(char) for char in participant_id)
-    rng = np.random.default_rng(seed)
-    today = date.today()
-    rows: list[tuple[Any, ...]] = []
-    for offset in range(days - 1, -1, -1):
-        day = today - timedelta(days=offset)
-        stress = float(np.clip(rng.normal(48, 14), 12, 92))
-        sleep = float(np.clip(8.2 - stress / 35 + rng.normal(0, 0.45), 4.5, 9.2))
-        hrv = float(np.clip(72 - stress * 0.45 + rng.normal(0, 5), 20, 85))
-        resting_hr = float(np.clip(58 + stress * 0.15 + rng.normal(0, 2), 52, 85))
-        rows.append(
-            (
-                participant_id,
-                datetime.combine(day, datetime.min.time(), timezone.utc)
-                .replace(hour=8)
-                .isoformat(),
-                "Oura demo",
-                round(resting_hr + rng.normal(12, 3), 1),
-                round(hrv, 1),
-                round(resting_hr, 1),
-                round(sleep, 2),
-                round(stress, 1),
-                round(100 - stress * 0.65 + rng.normal(0, 4), 1),
-                int(np.clip(rng.normal(7600, 2100), 1800, 15000)),
-                int(rng.integers(42, 96)),
-                "mock",
-            )
-        )
-    return rows
-
-
-def create_participant_with_consent_and_wearable(
-    record: dict[str, Any],
-    days: int = STUDY_DURATION_DAYS,
-) -> None:
-    """Atomically persist a new participant, consent, and initial demo wearable data.
-
-    This intentionally uses one connection/commit so participant registration
-    pays for only one Turso write sync instead of three separate write syncs.
-    """
+def create_participant_with_consent(record: dict[str, Any]) -> None:
+    """Create a participant and consent in one durable Turso transaction."""
     fields = (
         "participant_id", "access_code_hash", "age", "gender", "occupation",
         "academic_status", "medication", "sleep_disorders",
@@ -814,7 +774,6 @@ def create_participant_with_consent_and_wearable(
     )
     values = [record.get(field) for field in fields]
     placeholders = ", ".join("?" for _ in fields)
-
     with connection() as conn:
         conn.execute(
             f"INSERT INTO participants ({', '.join(fields)}) VALUES ({placeholders})",
@@ -827,7 +786,62 @@ def create_participant_with_consent_and_wearable(
                VALUES (?, '1.0', 1, 1, ?)""",
             (record["participant_id"], utc_now()),
         )
-        rows = _build_mock_wearable_rows(record["participant_id"], days)
+
+
+def create_participant_with_consent_and_wearable(
+    record: dict[str, Any], days: int = STUDY_DURATION_DAYS
+) -> None:
+    """Create registration records and demo wearable rows in one durable transaction."""
+    fields = (
+        "participant_id", "access_code_hash", "age", "gender", "occupation",
+        "academic_status", "medication", "sleep_disorders",
+        "mental_health_diagnosis", "coffee_per_day", "smoking", "alcohol",
+        "average_sleep_hours", "enrolled_at", "study_days",
+    )
+    values = [record.get(field) for field in fields]
+    placeholders = ", ".join("?" for _ in fields)
+
+    participant_id = record["participant_id"]
+    seed = sum(ord(char) for char in participant_id)
+    rng = np.random.default_rng(seed)
+    today = date.today()
+    rows = []
+    for offset in range(days - 1, -1, -1):
+        day = today - timedelta(days=offset)
+        stress = float(np.clip(rng.normal(48, 14), 12, 92))
+        sleep = float(np.clip(8.2 - stress / 35 + rng.normal(0, 0.45), 4.5, 9.2))
+        hrv = float(np.clip(72 - stress * 0.45 + rng.normal(0, 5), 20, 85))
+        resting_hr = float(np.clip(58 + stress * 0.15 + rng.normal(0, 2), 52, 85))
+        rows.append(
+            (
+                participant_id,
+                datetime.combine(day, datetime.min.time(), timezone.utc)
+                .replace(hour=8).isoformat(),
+                "Oura demo",
+                round(resting_hr + rng.normal(12, 3), 1),
+                round(hrv, 1),
+                round(resting_hr, 1),
+                round(sleep, 2),
+                round(stress, 1),
+                round(100 - stress * 0.65 + rng.normal(0, 4), 1),
+                int(np.clip(rng.normal(7600, 2100), 1800, 15000)),
+                int(rng.integers(42, 96)),
+                "mock",
+            )
+        )
+
+    with connection() as conn:
+        conn.execute(
+            f"INSERT INTO participants ({', '.join(fields)}) VALUES ({placeholders})",
+            values,
+        )
+        conn.execute(
+            """INSERT INTO consents
+               (participant_id, consent_version, privacy_accepted,
+                participation_accepted, consented_at)
+               VALUES (?, '1.0', 1, 1, ?)""",
+            (participant_id, utc_now()),
+        )
         conn.executemany(
             """INSERT INTO wearable_data
                (participant_id, recorded_at, provider, heart_rate, hrv,
@@ -1027,7 +1041,35 @@ def seed_mock_wearable(participant_id: str, days: int = STUDY_DURATION_DAYS) -> 
         ).fetchone()[0]
         if count:
             return
-        rows = _build_mock_wearable_rows(participant_id, days)
+
+        seed = sum(ord(char) for char in participant_id)
+        rng = np.random.default_rng(seed)
+        today = date.today()
+        rows = []
+        for offset in range(days - 1, -1, -1):
+            day = today - timedelta(days=offset)
+            stress = float(np.clip(rng.normal(48, 14), 12, 92))
+            sleep = float(np.clip(8.2 - stress / 35 + rng.normal(0, 0.45), 4.5, 9.2))
+            hrv = float(np.clip(72 - stress * 0.45 + rng.normal(0, 5), 20, 85))
+            resting_hr = float(np.clip(58 + stress * 0.15 + rng.normal(0, 2), 52, 85))
+            rows.append(
+                (
+                    participant_id,
+                    datetime.combine(day, datetime.min.time(), timezone.utc)
+                    .replace(hour=8)
+                    .isoformat(),
+                    "Oura demo",
+                    round(resting_hr + rng.normal(12, 3), 1),
+                    round(hrv, 1),
+                    round(resting_hr, 1),
+                    round(sleep, 2),
+                    round(stress, 1),
+                    round(100 - stress * 0.65 + rng.normal(0, 4), 1),
+                    int(np.clip(rng.normal(7600, 2100), 1800, 15000)),
+                    int(rng.integers(42, 96)),
+                    "mock",
+                )
+            )
         conn.executemany(
             """INSERT INTO wearable_data
                (participant_id, recorded_at, provider, heart_rate, hrv,
