@@ -12,9 +12,10 @@ from components.ui import banner, section_heading
 from config import ADMIN_ACCESS_CODE, ADMIN_USERNAME, STUDY_DURATION_DAYS
 from database.repository import (
     create_participant,
-    create_participant_with_consent_and_wearable,
+    create_participant_with_consent,
     get_participant,
     participant_exists,
+    seed_mock_wearable_background,
 )
 from services.auth import hash_access_code, verify_access_code
 
@@ -183,8 +184,13 @@ def render_registration() -> None:
             "enrolled_at": datetime.now(timezone.utc).isoformat(),
             "study_days": STUDY_DURATION_DAYS,
         }
-        # Persist participant + consent + initial demo wearable rows in ONE Turso commit.
-        create_participant_with_consent_and_wearable(participant_data)
+        # Persist participant + consent synchronously -- this is real
+        # research data, so durability is confirmed (one Turso sync)
+        # before the participant proceeds. Demo wearable rows are
+        # decorative only and have no research value, so they're seeded
+        # in the background instead of adding a second wait on top.
+        create_participant_with_consent(participant_data)
+        seed_mock_wearable_background(participant_id)
 
         # Reuse the submitted values instead of querying the database again.
         participant = dict(participant_data)
