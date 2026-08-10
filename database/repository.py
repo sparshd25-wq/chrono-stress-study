@@ -40,7 +40,9 @@ from datetime import date, datetime, timedelta, timezone
 import json
 import os
 import sqlite3
+import sys
 import threading
+import time
 from typing import Any, Iterator
 
 import numpy as np
@@ -359,10 +361,24 @@ def connection() -> Iterator[Any]:
             _conn_lock.acquire()
             lock_held = True
             if _cached_raw_conn is None:
+                _t0 = time.perf_counter()
                 _cached_raw_conn = _open_libsql_replica(turso_url, turso_token)
+                print(
+                    f"[ChronoStress TIMING] _open_libsql_replica: "
+                    f"{time.perf_counter() - _t0:.3f}s",
+                    file=sys.stderr,
+                    flush=True,
+                )
                 if not _synced_once:
+                    _t1 = time.perf_counter()
                     _sync_with_timeout(_cached_raw_conn)
                     _synced_once = True
+                    print(
+                        f"[ChronoStress TIMING] initial _sync_with_timeout: "
+                        f"{time.perf_counter() - _t1:.3f}s",
+                        file=sys.stderr,
+                        flush=True,
+                    )
             conn = _LibsqlConnection(_cached_raw_conn)
         else:
             conn = sqlite3.connect(DATABASE_PATH, timeout=20)
@@ -466,6 +482,9 @@ def initialise_database() -> None:
         f"{'Turso (libSQL embedded replica)' if use_libsql else 'local SQLite'}"
         f" | turso_credentials_detected={turso_configured}"
         f" | libsql_driver_loaded={libsql is not None}"
+        f" | connection_already_cached={_cached_raw_conn is not None}",
+        file=sys.stderr,
+        flush=True,
     )
     for directory in (DATA_DIR, EXPORTS_DIR, LOGS_DIR):
         directory.mkdir(parents=True, exist_ok=True)
