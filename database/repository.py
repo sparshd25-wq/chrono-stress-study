@@ -1095,6 +1095,13 @@ def seed_mock_wearable_background(participant_id: str, days: int = STUDY_DURATIO
     this decorative part moves off that critical path.
     """
     def _run() -> None:
+        # Head start for whatever loads immediately after registration
+        # (the dashboard, typically): without this, this thread and that
+        # page's own reads race for the same shared connection lock right
+        # away, and if this thread wins, the next page stalls behind this
+        # sync -- which looks exactly like "registration was slow to
+        # advance" even though registration itself already finished.
+        time.sleep(1.5)
         try:
             seed_mock_wearable(participant_id, days)
         except Exception:
