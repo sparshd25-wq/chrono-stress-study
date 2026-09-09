@@ -486,6 +486,11 @@ def start_assessment() -> None:
     st.session_state.assessment_step = 1
     st.session_state.assessment_started_at = datetime.now(timezone.utc).isoformat()
     st.session_state.assessment_session_id = uuid.uuid4().hex
+    # Idempotency guard for render_review()'s submit handler: this is
+    # deliberately reset to None here (a *new* logical attempt) rather than
+    # ever being touched inside the review/submit screen itself, so a fresh
+    # daily assessment is never blocked by a previous one's guard.
+    st.session_state.assessment_submitted_session_id = None
     st.session_state.assessment_answers = {}
     st.session_state.time_task_results = []
     st.session_state.cognitive_result = None
@@ -1355,17 +1360,46 @@ def render_review(participant_id: str) -> None:
     left_button, right_button = st.columns(2)
     if left_button.button("Back", use_container_width=True):
         previous_step()
-    if right_button.button("Submit assessment", type="primary", use_container_width=True):
+    current_session_id = st.session_state.get("assessment_session_id")
+    already_submitted = bool(current_session_id) and (
+        st.session_state.get("assessment_submitted_session_id") == current_session_id
+    )
+    submit_clicked = right_button.button(
+        "Submit assessment",
+        type="primary",
+        use_container_width=True,
+        disabled=already_submitted,
+    )
+    if submit_clicked and not already_submitted:
+        # Claim this attempt's session id BEFORE the slow, Turso-backed save
+        # below runs. A second execution of this same click -- e.g. a
+        # queued re-click from an impatient participant while the first
+        # save is still in flight, or any duplicate rerun/callback -- will
+        # see the marker already matching assessment_session_id and take
+        # the disabled/already_submitted path above instead of writing
+        # again. This is keyed to the same per-attempt id already generated
+        # in start_assessment() and already stored in the assessment
+        # metadata, not to a time window, so a genuinely new assessment
+        # started later is never affected.
+        st.session_state.assessment_submitted_session_id = current_session_id
         answers["reflection"] = reflection.strip()
-        with st.spinner("Saving assessment..."):
-            assessment_id = save_assessment(
-                participant_id,
-                st.session_state.assessment_started_at,
-                _assessment_answers_for_storage(answers),
-                _time_tasks_for_storage(st.session_state.time_task_results),
-                st.session_state.cognitive_result,
-                _assessment_metadata_for_storage(),
-            )
+        try:
+            with st.spinner("Saving assessment..."):
+                assessment_id = save_assessment(
+                    participant_id,
+                    st.session_state.assessment_started_at,
+                    _assessment_answers_for_storage(answers),
+                    _time_tasks_for_storage(st.session_state.time_task_results),
+                    st.session_state.cognitive_result,
+                    _assessment_metadata_for_storage(),
+                )
+        except Exception:
+            # Release the claim so a genuine retry after a transient
+            # failure (e.g. a network hiccup) is still possible -- only a
+            # *successful* save should permanently close off resubmission
+            # for this attempt.
+            st.session_state.assessment_submitted_session_id = None
+            raise
         st.session_state.last_assessment_id = assessment_id
         st.session_state.assessment_active = False
         st.session_state.active_page = "Dashboard"
